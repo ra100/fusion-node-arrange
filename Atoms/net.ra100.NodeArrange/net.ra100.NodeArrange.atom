@@ -1,0 +1,36 @@
+Atom {
+	Name = "Node Arrange",
+	Category = "Scripts/Flow",
+	Author = "ra100",
+	Version = 1.0,
+	Date = {2026, 10, 21},
+	Description = [[<p>Blender-style "Arrange Nodes" for the Fusion node view. One click lays out the selected tools (or the whole comp) as a clean left-to-right or top-to-bottom flow.</p>
+
+<p>Layered (Sugiyama) layout, the same family of algorithm Blender's Node Arrange uses:</p>
+<ul>
+	<li>Each tool gets a column; tools sit right before their nearest consumer.</li>
+	<li>Crossing reduction (barycenter sweeps plus adjacent swaps).</li>
+	<li>The main image path comes out straight; Foreground inputs go one row above, masks one row below.</li>
+	<li>Independent node trees are stacked and right-aligned on their outputs.</li>
+	<li>Groups and Macros count as one tile. Notes and Underlays are not moved. One undo step.</li>
+</ul>
+
+<p>Usage:</p>
+<ul>
+	<li>Resolve: Workspace &gt; Scripts &gt; Comp &gt; Node Arrange &gt; Arrange Nodes / Horizontal / Vertical.</li>
+	<li>Fusion Studio: the "Node Arrange" menu in the menu bar (after a restart), or Scripts &gt; Comp &gt; Node Arrange. The actions can be bound in View &gt; Customize Hotkeys.</li>
+</ul>
+
+<p>"Arrange Nodes" picks the flow direction from the comp's current links. Spacing is set in M.defaults at the top of Modules/Lua/NodeArrange.lua.</p>
+
+<p>Inspired by NodeAlign by Stefano / Prismanet (https://github.com/prismanetcom/nodealign).</p>
+<p>Source and issues: https://github.com/ra100/fusion-node-arrange</p>]],
+	Deploy = {
+		"Modules/Lua/NodeArrange.lua",
+		"Scripts/Comp/Node Arrange/Arrange Nodes.lua",
+		"Scripts/Comp/Node Arrange/Arrange Nodes Horizontal.lua",
+		"Scripts/Comp/Node Arrange/Arrange Nodes Vertical.lua",
+		"Config/NodeArrange.fu",
+	},
+	Minimum = 9.0,
+}

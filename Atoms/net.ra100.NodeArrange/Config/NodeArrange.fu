@@ -1,0 +1,94 @@
+-- Node Arrange menu for Fusion Studio: adds "Node Arrange" to the menu bar.
+-- Installed by Reactor, or copy into Config:/ and restart Fusion.
+-- In Resolve use Workspace > Scripts > Comp > Node Arrange instead.
+-- Scripts are looked up in Scripts:/ first, then in Reactor's Deploy folder.
+{
+	Action
+	{
+		ID = "NodeArrange_Auto",
+		Category = "Node Arrange",
+		Name = "Arrange Nodes",
+
+		Targets =
+		{
+			Composition =
+			{
+				Execute = _Lua [=[
+					local rel = "Comp/Node Arrange/Arrange Nodes.lua"
+					for _, root in ipairs({ "Scripts:", "Reactor:Deploy/Scripts/" }) do
+						local path = app:MapPath(root .. rel)
+						if bmd.fileexists(path) then
+							target:RunScript(path)
+							return
+						end
+					end
+					print("[NodeArrange] script not found: " .. rel)
+				]=],
+			},
+		},
+	},
+	Action
+	{
+		ID = "NodeArrange_Horizontal",
+		Category = "Node Arrange",
+		Name = "Arrange Nodes Horizontal",
+
+		Targets =
+		{
+			Composition =
+			{
+				Execute = _Lua [=[
+					local rel = "Comp/Node Arrange/Arrange Nodes Horizontal.lua"
+					for _, root in ipairs({ "Scripts:", "Reactor:Deploy/Scripts/" }) do
+						local path = app:MapPath(root .. rel)
+						if bmd.fileexists(path) then
+							target:RunScript(path)
+							return
+						end
+					end
+					print("[NodeArrange] script not found: " .. rel)
+				]=],
+			},
+		},
+	},
+	Action
+	{
+		ID = "NodeArrange_Vertical",
+		Category = "Node Arrange",
+		Name = "Arrange Nodes Vertical",
+
+		Targets =
+		{
+			Composition =
+			{
+				Execute = _Lua [=[
+					local rel = "Comp/Node Arrange/Arrange Nodes Vertical.lua"
+					for _, root in ipairs({ "Scripts:", "Reactor:Deploy/Scripts/" }) do
+						local path = app:MapPath(root .. rel)
+						if bmd.fileexists(path) then
+							target:RunScript(path)
+							return
+						end
+					end
+					print("[NodeArrange] script not found: " .. rel)
+				]=],
+			},
+		},
+	},
+
+	Menus
+	{
+		Target = "ChildFrame",
+
+		Before "Help"
+		{
+			Sub "Node Arrange"
+			{
+				"NodeArrange_Auto{}",
+				"_",
+				"NodeArrange_Horizontal{}",
+				"NodeArrange_Vertical{}",
+			},
+		},
+	},
+}
