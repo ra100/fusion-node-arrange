@@ -29,6 +29,7 @@ M.defaults = {
 
 local EPS = 1e-9
 local MAIN_W = 16  -- weight of main-input links: keeps the image path straight
+local CHAIN_W = 64 -- weight that holds a long link's dummies on its straight line
 
 local function copyDefaults(opts)
   local o = {}
@@ -147,6 +148,7 @@ local function layoutComponent(nodes, edges, compNodes, compEdges, sp, o, origS)
     for k = 1, span - 1 do
       local s0 = a.s0 + (b.s0 - a.s0) * k / span
       local d = newItem(nil, a.rank + minR + k, s0)
+      d.chain = { a = a, b = b, t = k / span }
       local w = (k > 1) and 8 or (ed.main and MAIN_W or 2)
       local sg = { a = prev, b = d, slot = 0, w = w }
       segs[#segs + 1] = sg
@@ -379,13 +381,17 @@ local function layoutComponent(nodes, edges, compNodes, compEdges, sp, o, origS)
     local t, w, gap = {}, {}, {}
     for i, it in ipairs(L) do
       local sum, ws = 0, 0
-      if useIn then
+      local ch = it.chain
+      if ch then
+        -- Fusion draws the link straight from a to b, so its dummies sit on that line.
+        sum, ws = CHAIN_W * (s[ch.a] + (s[ch.b] - s[ch.a]) * ch.t), CHAIN_W
+      elseif useIn then
         for _, sg in ipairs(inSeg[it]) do
           sum = sum + sg.w * (s[sg.a] - sg.slot * sp.node)
           ws = ws + sg.w
         end
       end
-      if useOut then
+      if useOut and not ch then
         for _, sg in ipairs(outSeg[it]) do
           sum = sum + sg.w * (s[sg.b] + sg.slot * sp.node)
           ws = ws + sg.w
@@ -424,6 +430,7 @@ Pure layout.
   edges[k] = { from = i, to = j, slot = int, main = bool }
     slot: 0 = main input, -1, -2 ... above (Foreground), 1, 2 ... below (masks)
   opts.anchor = i keeps node i at its current position.
+  opts.obstacles = { {x=, y=}, ... } tiles that stay put and must not be covered.
 Returns positions[i] = { x = , y = }, info  or nil, err.
 ]]
 function M.layout(nodes, edges, opts)
@@ -532,7 +539,39 @@ function M.layout(nodes, edges, opts)
     for _, p in pairs(out) do p.x, p.y = p.x + dx, p.y + dy end
     out[a] = { x = nodes[a].x, y = nodes[a].y }
   end
-  return out, { direction = dir, components = #comps, crossings = crossings }
+
+  -- Keep clear of tiles that are not being arranged. Without an anchor the
+  -- block slides across the flow; an anchored block stays and overlaps are reported.
+  local obstacles = o.obstacles or {}
+  local function overlaps(ds)
+    local sx, sy = 0, ds
+    if dir == "vertical" then sx, sy = ds, 0 end
+    local n = 0
+    for _, p in pairs(out) do
+      for _, q in ipairs(obstacles) do
+        if math.abs(p.x + sx - q.x) < 1 - EPS and math.abs(p.y + sy - q.y) < 1 - EPS then n = n + 1 end
+      end
+    end
+    return n
+  end
+  local hits = overlaps(0)
+  if hits > 0 and not (a and out[a]) then
+    local step = (o.snap and o.snap > 0) and o.snap or 0.25
+    for k = 1, 4000 do
+      local ds
+      for _, sign in ipairs({ 1, -1 }) do
+        if overlaps(sign * k * step) == 0 then ds = sign * k * step break end
+      end
+      if ds then
+        for _, p in pairs(out) do
+          if dir == "horizontal" then p.y = p.y + ds else p.x = p.x + ds end
+        end
+        hits = 0
+        break
+      end
+    end
+  end
+  return out, { direction = dir, components = #comps, crossings = crossings, overlaps = hits }
 end
 
 local SKIP_TYPES = { Note = true, Underlay = true }
@@ -663,6 +702,15 @@ function M.run(comp, opts)
 
   local layoutOpts = copyDefaults(opts)
   layoutOpts.anchor = anchorTool and index[anchorTool]
+  layoutOpts.obstacles = {}
+  if scope == "selection" then
+    for _, t in ipairs(gather(false)) do
+      if not index[t] then
+        local x, y = flow:GetPos(t)
+        table.insert(layoutOpts.obstacles, { x = x, y = y })
+      end
+    end
+  end
   local pos, info = M.layout(nodes, edges, layoutOpts)
   if not pos then print("[NodeArrange] " .. tostring(info)) return end
   if opts.apply == false then return pos, info, tools, edges end
@@ -679,6 +727,10 @@ function M.run(comp, opts)
   print(string.format("[NodeArrange] %d tools (%s), %d links, %s, %d trees, %d crossings, anchor %s",
     #tools, scope, #edges, info.direction, info.components, info.crossings,
     layoutOpts.anchor and anchorTool.Name or "none"))
+  if info.overlaps > 0 then
+    print(string.format("[NodeArrange] %d tiles overlap unselected tools%s", info.overlaps,
+      layoutOpts.anchor and ("; the anchor " .. anchorTool.Name .. " was kept in place") or ""))
+  end
 end
 
 return M

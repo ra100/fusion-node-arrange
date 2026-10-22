@@ -34,7 +34,10 @@ def run_layout(lua, M, names, links, positions, opts=None):
     edges = lua.table_from([
         lua.table_from({"from": idx[a], "to": idx[b], "slot": s, "main": m}) for a, b, s, m in links
     ])
-    pos, info = M.layout(nodes, edges, lua.table_from(opts or {}))
+    opts = dict(opts or {})
+    if "obstacles" in opts:
+        opts["obstacles"] = lua.table_from([lua.table_from({"x": x, "y": y}) for x, y in opts["obstacles"]])
+    pos, info = M.layout(nodes, edges, lua.table_from(opts))
     if pos is None:
         raise RuntimeError(info)
     out = {n: (pos[idx[n]].x, pos[idx[n]].y) for n in names}
@@ -52,6 +55,28 @@ def check(names, links, pos, direction):
             if abs(pos[a][0] - pos[b][0]) < 1 - 1e-6 and abs(pos[a][1] - pos[b][1]) < 1 - 1e-6:
                 errors.append(f"overlap {a} {b}")
     return errors
+
+
+def links_through_tiles(names, links, pos, half=0.45):
+    """Count (link, tile) pairs where the straight link line crosses another tile.
+
+    Fusion draws links as straight lines; this is reported, not checked.
+    """
+    def hits(p, q, c):
+        t0, t1 = 0.0, 1.0
+        for d, lo, hi, s in ((q[0] - p[0], c[0] - half, c[0] + half, p[0]),
+                             (q[1] - p[1], c[1] - half, c[1] + half, p[1])):
+            if abs(d) < 1e-12:
+                if s < lo or s > hi:
+                    return False
+            else:
+                a, b = sorted(((lo - s) / d, (hi - s) / d))
+                t0, t1 = max(t0, a), min(t1, b)
+                if t0 > t1:
+                    return False
+        return True
+
+    return sum(1 for a, b, _, _ in links for n in names if n not in (a, b) and hits(pos[a], pos[b], pos[n]))
 
 
 def render(path, names, links, pos):
@@ -183,9 +208,22 @@ def main():
             dx, dy = pos3[anchor][0] - pos[anchor][0], pos3[anchor][1] - pos[anchor][1]
             if any(abs(pos3[n][0] - pos[n][0] - dx) + abs(pos3[n][1] - pos[n][1] - dy) > 1e-6 for n in names):
                 errs.append("anchored layout differs from the unanchored one")
+            # Selection: arrange half the nodes; the rest stay put and must not be covered.
+            sel = names[: len(names) // 2]
+            sel_links = [l for l in links if l[0] in sel and l[1] in sel]
+            obstacles = [positions[n] for n in names if n not in sel]
+            pos4, info4 = run_layout(lua, M, sel, sel_links, positions,
+                                     {"direction": direction, "obstacles": obstacles})
+            covered = [n for n in sel for q in obstacles
+                       if abs(pos4[n][0] - q[0]) < 1 - 1e-6 and abs(pos4[n][1] - q[1]) < 1 - 1e-6]
+            if covered or info4["overlaps"]:
+                errs.append(f"selection covers unselected tiles: {covered[:3]} overlaps={info4['overlaps']}")
+            errs += check(sel, sel_links, pos4, direction)
             status = "OK " if not errs else "FAIL"
             failed += bool(errs)
-            print(f"{status} {name:11s} {direction:10s} nodes={len(names):3d} trees={info['components']} crossings={info['crossings']}")
+            through = links_through_tiles(names, links, pos)
+            print(f"{status} {name:11s} {direction:10s} nodes={len(names):3d} trees={info['components']} "
+                  f"crossings={info['crossings']} through-tiles={through}")
             for e in errs[:5]:
                 print("     ", e)
             try:

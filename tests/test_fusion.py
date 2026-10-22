@@ -136,6 +136,20 @@ def main():
         expect(all(after[n] == start[n] for n in tools if n not in sel), "unselected tools did not move")
         expect(after["Key"] == start["Key"], "active tool in the selection is the anchor")
         expect(selected_names(comp) == sorted(sel), "selection is the arranged tools")
+
+        # Several selected, no active tool: the block must not cover unselected tiles.
+        comp.Undo(1)
+        flow.Select()
+        for n in sel:
+            flow.Select(tools[n], True)
+        comp.SetActiveTool(None)
+        flow.SetPos(tools["Plate"], start["Mrg"][0], start["Mrg"][1] - 1)
+        flow.SetPos(tools["Blur"], start["Mrg"][0] - 1.5, start["Mrg"][1])
+        run_arrange(comp, '{ direction = "horizontal" }')
+        after = positions(flow, tools)
+        covered = [(a, b) for a in sel for b in tools if b not in sel
+                   and abs(after[a][0] - after[b][0]) < 1 and abs(after[a][1] - after[b][1]) < 1]
+        expect(not covered, f"arranged selection clears unselected tiles {covered}")
     finally:
         comp.SetAttrs({"COMPB_Modified": False})
         comp.Close()
