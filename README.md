@@ -4,6 +4,20 @@ Blender-style **Arrange Nodes** for Blackmagic Fusion Studio and the DaVinci
 Resolve Fusion page. One click lays out the selected tools, or the whole comp,
 as a clean left-to-right or top-to-bottom flow.
 
+## Example
+
+A transporter-effect comp with 81 tools, before and after one run of
+**Arrange Nodes Horizontal** in Fusion Studio 21. The "before" positions came
+from the script that built the comp, with the two MediaIns left far away.
+
+**Before**
+
+![Node view before arranging](docs/before.png)
+
+**After**
+
+![Node view after arranging](docs/after.png)
+
 ## What it does
 
 It uses a layered (Sugiyama) layout, the same family of algorithm as Blender's
@@ -17,7 +31,7 @@ Node Arrange:
 3. **Crossing reduction.** Barycenter sweeps plus adjacent swaps, from two
    starting orders: the current flow, and a walk upstream from the outputs. On
    ties, the order closest to the current flow wins, so running it again on an
-   arranged comp changes nothing.
+   arranged comp without crossings changes nothing.
 4. **Placement.** For each column, a weighted least-squares fit with minimum
    spacing. Main inputs weigh most, so the main image path is a straight line.
    Foreground sources go one row above the node they feed, masks one row below.
@@ -30,25 +44,30 @@ Node Arrange:
 Other behaviour:
 
 - **What gets arranged:** with 2 or more tools selected, only the selection.
-  With 0 or 1, the whole comp.
+  With 0 or 1, the whole comp. A tool selected inside an open Group counts as
+  the Group. Selecting an Underlay selects the tools inside it.
 - **Anchor:** the active tool (red border, the last one you clicked) keeps its
   position and the layout is built around it. With exactly one tool selected,
   that tool is the anchor. Without an active tool, the layout is right-aligned
   on the old outputs.
-- **Selection and the rest of the comp:** when only a selection is arranged,
-  the result is moved across the flow until it covers no other tool or
-  Underlay. With an active tool, the active tool stays put instead, and the
-  Console reports any overlap.
+- **Selection and the rest of the comp:** when only a selection is arranged
+  and there is no active tool, the result is moved across the flow until it
+  covers no other tool or Underlay. If you click tools to select them, the last
+  one clicked is active: it stays put, and the Console reports any overlap
+  instead. Select with a drag box to get the sideways move.
 - **Underlays:** a tool belongs to an Underlay when its centre is inside it.
   An Underlay and its tools are arranged as one block, and the Underlay is
   resized around them with its old margins. If a link leaves the Underlay and
   comes back into it, that Underlay cannot be kept as one block: its tools are
-  arranged on their own and the Console says so.
+  arranged on their own and the Console says so. Notes and empty Underlays
+  inside a moved Underlay move with it; other empty Underlays are kept clear.
 - After a run, every arranged tool and Underlay is selected, so the block can
   be moved straight away.
-- Groups and Macros count as one tile. Notes are not moved.
+- Groups and Macros count as one tile. A link that loops back through a Group
+  is ignored for the layout, and the Console says so.
 - Each run is one undo step.
-- **Arrange Nodes** picks horizontal or vertical from the comp's current links.
+- **Arrange Nodes** picks horizontal or vertical: whichever axis more of the
+  current links point forward along.
   **Arrange Nodes Horizontal** and **Arrange Nodes Vertical** force a direction.
 
 ## Install
@@ -121,7 +140,7 @@ Fusion grid units (one tile = 1):
 | `horizontal.node` / `vertical.node` | 1.5 / 1.5 | distance between tiles in a column |
 | `componentGap` | 1.0 | extra space between separate trees |
 | `snap` | 0.25 | grid rounding, 0 disables |
-| `untangle` | 200 | swap tries (at most 1 s) to move links off tiles |
+| `untangle` | 200 | swap tries to move links off tiles |
 
 From a script you can also call it directly:
 
@@ -173,17 +192,21 @@ python3 tests/test_layout.py /tmp/nodearrange_out
 
 Each case is checked in both directions: every link points downstream, no tiles
 overlap, re-running on the result does not add crossings (a crossing-free
-layout must not move at all), an anchored run keeps the anchor in place, an
-arranged half of the graph covers none of the other half, and Underlay frames
-hold exactly their own tools. The `through-tiles` column counts links that
+layout must not move at all, also with Underlays), an anchored run keeps the
+anchor in place, an arranged half of the graph covers none of the other half,
+Underlay frames hold exactly their own tools, and Arrange Nodes (auto) keeps
+the direction of an arranged comp. Small edge cases follow: empty comp, single
+tool, duplicate links, a cycle, nested options, box obstacles and frame
+margins. The `through-tiles` column counts links that
 pass behind a tile (60 before the swap step, 47 after, over all cases). PNG
 previews go to the output folder. Cases: a real Resolve comp snapshot, a
 synthetic keying comp, and random graphs.
 
 The Fusion part is tested against a running Fusion Studio. The test opens a new
 comp, runs this checkout's module, checks positions, selection, anchor,
-overlap with unselected tools, Underlay refit, undo, and a non-ASCII tool name
-with the module loaded from a non-ASCII folder. It then closes the comp without
+overlap with unselected tools, Underlay refit with a Note riding along,
+arranging by selecting an Underlay, undo, and a non-ASCII tool name with the
+module loaded from a non-ASCII folder. It then closes the comp without
 saving:
 
 ```bash

@@ -110,7 +110,12 @@ def test_underlay(fu, expect):
         flow.SetPos(ul, 10, 0)
         flow.SetPos(tools["BG"], 10, 1)
         flow.SetPos(tools["Mrg"], 10, 3)
+        flow.Select()
+        note = comp.AddTool("Note", 0, 0)
+        note.SetAttrs({"TOOLS_Name": "NoteIn"})
+        flow.SetPos(note, 10, 4)
         before = underlay_rect(comp, flow, ul)
+        note_before = flow.GetPosTable(note)
         flow.Select()
         comp.SetActiveTool(None)
         run_arrange(comp, '{ direction = "horizontal" }')
@@ -121,6 +126,10 @@ def test_underlay(fu, expect):
         inside = sorted(n for n, (x, y) in after.items() if l < x < r and t < y < b)
         expect(inside == ["BG", "Mrg"], f"underlay holds exactly its tools {inside}")
         expect((l, r, t, b) != before, f"underlay refitted {before} -> {(l, r, t, b)}")
+        n2 = flow.GetPosTable(comp.FindTool("NoteIn"))
+        # Fusion rounds Underlay positions to its pixel grid, hence the tolerance.
+        expect(abs((n2[1] - note_before[1]) - (l - before[0])) < 0.02 and abs((n2[2] - note_before[2]) - (t - before[2])) < 0.02,
+               "note inside the underlay moved with it")
         comp.Undo(1)
         for _ in range(50):
             ul3 = comp.FindTool("UL")
@@ -128,6 +137,16 @@ def test_underlay(fu, expect):
                 break
             time.sleep(0.1)
         expect(ul3 is not None and underlay_rect(comp, flow, ul3) == before, "one undo restores the underlay")
+
+        # Selecting only the Underlay arranges the tools inside it.
+        start = positions(flow, tools)
+        flow.Select()
+        flow.Select(ul3, True)
+        comp.SetActiveTool(None)
+        run_arrange(comp, '{ direction = "horizontal" }')
+        after = positions(flow, tools)
+        changed = sorted(n for n in tools if after[n] != start[n])
+        expect(set(changed) <= {"BG", "Mrg"} and changed, f"selected underlay arranges only its tools {changed}")
     finally:
         comp.SetAttrs({"COMPB_Modified": False})
         comp.Close()

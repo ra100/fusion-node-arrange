@@ -36,11 +36,22 @@ def run_layout(lua, M, names, links, positions, opts=None):
     ])
     opts = dict(opts or {})
     if "obstacles" in opts:
-        opts["obstacles"] = lua.table_from([lua.table_from({"x": x, "y": y}) for x, y in opts["obstacles"]])
-    if "clusters" in opts:
-        opts["clusters"] = lua.table_from([
-            lua.table_from({"members": lua.table_from([idx[n] for n in c])}) for c in opts["clusters"]
+        # (x, y) is one tile, (x, y, w, h) a box
+        opts["obstacles"] = lua.table_from([
+            lua.table_from(dict(zip(("x", "y", "w", "h"), q))) for q in opts["obstacles"]
         ])
+    if "clusters" in opts:
+        # a cluster is a list of names, or (names, {"left": .., ...}) with pads
+        def cluster(c):
+            names_, pad = (c if isinstance(c, tuple) else (c, None))
+            t = {"members": lua.table_from([idx[n] for n in names_])}
+            if pad:
+                t["pad"] = lua.table_from(pad)
+            return lua.table_from(t)
+        opts["clusters"] = lua.table_from([cluster(c) for c in opts["clusters"]])
+    for k in ("horizontal", "vertical"):
+        if isinstance(opts.get(k), dict):
+            opts[k] = lua.table_from(opts[k])
     pos, info = M.layout(nodes, edges, lua.table_from(opts))
     if pos is None:
         raise RuntimeError(info)
@@ -166,6 +177,11 @@ def comp_case():
     return names, L
 
 
+# Same as MAIN_IDS in NodeArrange.lua.
+MAIN_IDS = {"Background", "Input", "MainInput", "Input1", "SceneInput", "SceneInput1", "Image", "Image1",
+            "Source", "Data3D", "MaterialInput"}
+
+
 def fixture_case(path=FIXTURE):
     """Real Resolve comp snapshot (see fixtures/NOTICE.md), with its own positions."""
     with open(path) as f:
@@ -175,8 +191,8 @@ def fixture_case(path=FIXTURE):
     links = []
     for n in data["nodes"]:
         ins = [i for i in n["inputs"] if i["source"] in positions]
-        is_mask = ["Mask" in i["id"] or i["type"] == "Mask" for i in ins]
-        main = next((k for k, i in enumerate(ins) if i["id"] in ("Background", "Input", "SceneInput", "Image")), None)
+        is_mask = ["Mask" in i["id"] or "Matte" in i["id"] or i["type"] == "Mask" for i in ins]
+        main = next((k for k, i in enumerate(ins) if i["id"] in MAIN_IDS), None)
         if main is None:
             main = next((k for k, i in enumerate(ins) if not is_mask[k] and i["id"] != "Foreground"), None)
         above = below = 0
@@ -206,6 +222,65 @@ def random_case(seed, n=25):
     return names, L
 
 
+def edge_cases(lua, M):
+    """Small hand-made cases; returns the number of failures."""
+    errs = []
+
+    def case(name, names, links, positions, opts, test):
+        try:
+            pos, info = run_layout(lua, M, names, links, positions, opts)
+            msg = test(pos, info)
+        except Exception as e:  # noqa: BLE001
+            msg = f"error {e}"
+        print(("OK   " if not msg else "FAIL ") + name + (f": {msg}" if msg else ""))
+        if msg:
+            errs.append(name)
+
+    case("empty", [], [], {}, {}, lambda p, i: None if p == {} else "not empty")
+    case("single tool", ["A"], [], {"A": (3, 4)}, {}, lambda p, i: None if p["A"] == (3, 4) else p)
+    case("duplicate links", ["A", "B"], [("A", "B", 0, True), ("A", "B", -1, False)], {"A": (0, 0), "B": (5, 0)},
+         {}, lambda p, i: None if p["B"][0] > p["A"][0] else p)
+    case("snap 0", ["A", "B", "C"], [("A", "C", 0, True), ("B", "C", -1, False)],
+         {"A": (0, 0.3), "B": (0, 1.7), "C": (2, 0)}, {"snap": 0},
+         lambda p, i: None if p["C"][0] > p["A"][0] else p)
+    case("cycle does not block other trees", ["A", "G", "X", "Y"],
+         [("A", "G", 0, True), ("G", "A", 1, False), ("X", "Y", 0, True)],
+         {"A": (0, 0), "G": (2, 0), "X": (0, 3), "Y": (2, 3)}, {},
+         lambda p, i: None if i["cycles"] == 1 and p["Y"][0] > p["X"][0] else (p, i["cycles"]))
+    case("nested option table", ["A", "B"], [("A", "B", 0, True)], {"A": (0, 0), "B": (1, 0)},
+         {"direction": "horizontal", "horizontal": {"layer": 3}},
+         lambda p, i: None if abs(p["B"][0] - p["A"][0] - 3) < 1e-6 else p)
+    fan = ["S1", "S2", "S3", "S4", "S5", "S6", "M"]
+    fan_links = [(n, "M", 0 if n == "S1" else -k, n == "S1") for k, n in enumerate(fan[:-1])]
+    fan_pos = {n: (k, 0) for k, n in enumerate(fan)}
+
+    def keeps_vertical(p, i):
+        _, again = run_layout(lua, M, fan, fan_links, p, {"direction": "auto"})
+        return None if again["direction"] == "vertical" else "auto flipped to horizontal"
+    case("fan-in stays vertical in auto", fan, fan_links, fan_pos, {"direction": "vertical"}, keeps_vertical)
+
+    chain = ["A", "B", "C", "D", "E"]
+    chain_links = [("A", "D", -1, False), ("B", "D", 0, True), ("C", "D", 1, False), ("D", "E", 0, True)]
+    chain_pos = {"A": (0, 0), "B": (0, 2), "C": (0, 4), "D": (3, 2), "E": (6, 2)}
+
+    def stable(p, i):
+        p2, _ = run_layout(lua, M, chain, chain_links, p, {"clusters": [["B", "C", "D", "E"]]})
+        moved = {n: (p[n], p2[n]) for n in chain if p[n] != p2[n]}
+        return None if not moved else f"re-run moved {moved}"
+    case("cluster re-run is stable", chain, chain_links, chain_pos, {"clusters": [["B", "C", "D", "E"]]}, stable)
+    case("anchor inside a cluster", chain, chain_links, chain_pos,
+         {"clusters": [["B", "C", "D", "E"]], "anchor": 4},
+         lambda p, i: None if p["D"] == (3, 2) else p["D"])
+    case("cluster pads widen the frame", chain, chain_links, chain_pos,
+         {"clusters": [(["D", "E"], {"left": 1, "right": 1, "top": 1, "bottom": 1})]},
+         lambda p, i: None if abs((i["clusters"][1][1] - i["clusters"][1][0]) - (p["E"][0] - p["D"][0] + 2)) < 1e-6
+         else i["clusters"])
+    case("box obstacle is avoided", ["A", "B"], [("A", "B", 0, True)], {"A": (0, 0), "B": (2, 0)},
+         {"direction": "horizontal", "obstacles": [(1, 0, 6, 3)]},
+         lambda p, i: None if all(abs(p[n][1]) >= 2 - 1e-6 for n in p) and i["overlaps"] == 0 else (p, i["overlaps"]))
+    return len(errs)
+
+
 def main():
     out_dir = sys.argv[1] if len(sys.argv) > 1 else os.path.join(tempfile.gettempdir(), "nodearrange_out")
     os.makedirs(out_dir, exist_ok=True)
@@ -226,8 +301,8 @@ def main():
             moved = [n for n in names if abs(pos[n][0] - pos2[n][0]) + abs(pos[n][1] - pos2[n][1]) > 1e-6]
             if info["crossings"] == 0 and moved:
                 errs.append(f"not idempotent: {len(moved)} moved")
-            if info2["crossings"] > info["crossings"]:
-                errs.append(f"re-run added crossings: {info['crossings']} -> {info2['crossings']}")
+            if info2["drawn"] > info["drawn"]:
+                errs.append(f"re-run added drawn crossings: {info['drawn']} -> {info2['drawn']}")
             # Anchored: the anchor keeps its position, the rest is the same layout shifted.
             anchor = names[len(names) // 2]
             pos3, _ = run_layout(lua, M, names, links, positions,
@@ -262,6 +337,14 @@ def main():
             if name == "keying" and dropped:
                 errs.append(f"keying clusters dropped {dropped}")
             cl_note = f"{len(info5['clusters'])}kept/{len(dropped)}dropped"
+            pos6, info6 = run_layout(lua, M, names, links, pos5, {"direction": direction, "clusters": clusters})
+            moved = [n for n in names if abs(pos5[n][0] - pos6[n][0]) + abs(pos5[n][1] - pos6[n][1]) > 1e-6]
+            if info5["crossings"] == 0 and moved:
+                errs.append(f"clusters: re-run moved {len(moved)} tools")
+            # "Arrange Nodes" (auto) on an arranged comp keeps its direction.
+            _, info7 = run_layout(lua, M, names, links, pos, {"direction": "auto"})
+            if info7["direction"] != direction:
+                errs.append(f"auto picked {info7['direction']} on a {direction} layout")
             try:
                 render(os.path.join(out_dir, f"{name}_{direction}_clusters.png"), names, links, pos5,
                        info5["clusters"])
@@ -271,13 +354,14 @@ def main():
             failed += bool(errs)
             through = links_through_tiles(names, links, pos)
             print(f"{status} {name:11s} {direction:10s} nodes={len(names):3d} trees={info['components']} "
-                  f"crossings={info['crossings']} through-tiles={through} clusters={cl_note}")
+                  f"crossings={info['drawn']} through-tiles={through} clusters={cl_note}")
             for e in errs[:5]:
                 print("     ", e)
             try:
                 render(os.path.join(out_dir, f"{name}_{direction}.png"), names, links, pos)
             except ImportError:
                 pass
+    failed += edge_cases(lua, M)
     sys.exit(1 if failed else 0)
 
 
