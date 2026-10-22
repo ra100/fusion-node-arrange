@@ -10,14 +10,15 @@ Atom {
 <ul>
 	<li>Each tool gets a column; tools sit right before their nearest consumer.</li>
 	<li>Crossing reduction (barycenter sweeps plus adjacent swaps).</li>
-	<li>The main image path comes out straight; Foreground inputs go one row above, masks one row below.</li>
+	<li>Tools sit level with their main input where there is room, so the main image path is straight; Foreground inputs go one row above, masks one row below.</li>
 	<li>Independent node trees are stacked and right-aligned on their outputs.</li>
 	<li>Links that would pass behind a tile are moved off it where a swap allows.</li>
 	<li>Underlays and the tools inside them are arranged as one block, and the Underlay is resized to fit.</li>
 	<li>Groups and Macros count as one tile. Notes inside a moved Underlay move with it. One undo step.</li>
+	<li>Running it again on an arranged comp without crossings changes nothing.</li>
 </ul>
 
-<p>With 2+ tools selected only the selection is arranged, otherwise the whole comp. Selecting an Underlay selects its tools. The active tool keeps its position; without one, an arranged selection moves sideways until it covers no other tool. The arranged tools are left selected.</p>
+<p>With 2+ tools selected only the selection is arranged, otherwise the whole comp. A tool selected inside an open Group counts as the Group, and selecting an Underlay selects its tools. The active tool keeps its position; without one, an arranged selection moves sideways until it covers no other tool. The arranged tools are left selected.</p>
 
 <p>Usage:</p>
 <ul>
@@ -26,6 +27,15 @@ Atom {
 </ul>
 
 <p>"Arrange Nodes" picks the flow direction from the comp's current links. Spacing is set in M.defaults at the top of Modules/Lua/NodeArrange.lua.</p>
+
+<p>Changes:</p>
+<ul>
+	<li>1.3: straighter main path, stable re-runs with Underlays, loops through Groups no longer stop the run, selection inside Groups and by Underlay, undo-safe on errors.</li>
+	<li>1.2: Underlays arranged as blocks, links moved off tiles, a selection keeps clear of the rest of the comp.</li>
+	<li>1.1: the active tool stays in place, arranged tools stay selected, loading through Fusion path maps and require.</li>
+	<li>1.0: first release.</li>
+</ul>
+<p>Full changelog: https://github.com/ra100/fusion-node-arrange/blob/main/CHANGELOG.md</p>
 
 <p>Inspired by NodeAlign by Stefano / Prismanet (https://github.com/prismanetcom/nodealign).</p>
 <p>Written with an AI coding assistant (Claude) under the author's direction. Tested on Fusion Studio 21 (Linux).</p>

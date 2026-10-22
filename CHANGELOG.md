@@ -35,6 +35,7 @@ All notable changes to Node Arrange. Versions match `Version` in
 ### Added
 
 - Before and after screenshots in the README.
+- The Reactor description lists the version history and links this file.
 - Offline edge-case tests: empty comp, single tool, duplicate links, `snap = 0`,
   a cycle, nested options, auto direction, Underlay re-run, an anchor inside an
   Underlay, frame margins and box obstacles.
