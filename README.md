@@ -217,6 +217,10 @@ Tested on: Fusion Studio 21, Linux. Not yet tested: Windows, macOS, Resolve.
 Windows with a non-ASCII user folder is the case most likely to differ
 ([#3](https://github.com/ra100/fusion-node-arrange/issues/3)).
 
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md).
+
 ## Disclosure
 
 The code was written with an AI coding assistant (Claude, by Anthropic) under
