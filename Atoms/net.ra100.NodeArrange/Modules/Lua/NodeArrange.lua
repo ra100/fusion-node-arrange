@@ -10,7 +10,7 @@ M.run(comp, opts) is the Fusion glue.
 ]]
 
 local M = {}
-M.VERSION = "1.1"
+M.VERSION = "1.2"
 
 M.defaults = {
   -- "auto" picks horizontal or vertical from the comp's current links.
@@ -25,6 +25,7 @@ M.defaults = {
   snap = 0.25,         -- round positions to this step; 0 disables
   sweeps = 24,         -- crossing-reduction sweeps per starting order
   straighten = 16,     -- coordinate-assignment passes
+  untangle = 200,      -- swap tries (and at most 1 s) to move links off tiles they pass behind
 }
 
 local EPS = 1e-9
@@ -139,16 +140,19 @@ local function layoutComponent(nodes, edges, compNodes, compEdges, sp, o, origS)
     return it
   end
   for _, v in ipairs(compNodes) do itemOf[v] = newItem(v, rank[v], origS[v]) end
-  local segs = {}
+  local segs, links = {}, {}
   for _, e in ipairs(compEdges) do
     local ed = edges[e]
     local a, b = itemOf[ed.from], itemOf[ed.to]
     local span = b.rank - a.rank
     local prev = a
+    local link = { a = a, b = b, dummy = {} }
+    links[#links + 1] = link
     for k = 1, span - 1 do
       local s0 = a.s0 + (b.s0 - a.s0) * k / span
       local d = newItem(nil, a.rank + minR + k, s0)
       d.chain = { a = a, b = b, t = k / span }
+      link.dummy[d.rank] = d
       local w = (k > 1) and 8 or (ed.main and MAIN_W or 2)
       local sg = { a = prev, b = d, slot = 0, w = w }
       segs[#segs + 1] = sg
@@ -358,89 +362,157 @@ local function layoutComponent(nodes, edges, compNodes, compEdges, sp, o, origS)
   restore(best)
 
   -- 4. coordinates across the flow
+  local sizes = o.sizes or {}
+  local function extent(it, axis)
+    local z = it.node and sizes[it.node]
+    return z and z[axis] or 1
+  end
   local function gapBetween(p, q)
-    if p.node and q.node then return sp.node end
-    if not p.node and not q.node then return sp.dummy end
-    return (sp.node + sp.dummy) / 2
+    local g
+    if p.node and q.node then g = sp.node
+    elseif not p.node and not q.node then g = sp.dummy
+    else g = (sp.node + sp.dummy) / 2 end
+    return g + (extent(p, "s") - 1) / 2 + (extent(q, "s") - 1) / 2
   end
 
-  local s = {}
-  for r = 0, nLayers - 1 do
-    local L, y = layers[r], 0
-    for i, it in ipairs(L) do
-      if i > 1 then y = y + gapBetween(L[i - 1], it) end
-      s[it] = y
+  -- column positions; a wide block pushes its neighbouring columns apart
+  local wide, R = {}, { [0] = 0 }
+  for r = 0, nLayers - 1 do wide[r] = 1 end
+  for _, it in ipairs(items) do wide[it.rank] = math.max(wide[it.rank], extent(it, "r")) end
+  for r = 1, nLayers - 1 do
+    R[r] = R[r - 1] + sp.layer + (wide[r - 1] - 1) / 2 + (wide[r] - 1) / 2
+  end
+
+
+  local function assign()
+    local s = {}
+    for r = 0, nLayers - 1 do
+      local L, y = layers[r], 0
+      for i, it in ipairs(L) do
+        if i > 1 then y = y + gapBetween(L[i - 1], it) end
+        s[it] = y
+      end
+      local shift = y / 2
+      for _, it in ipairs(L) do s[it] = s[it] - shift end
     end
-    local shift = y / 2
-    for _, it in ipairs(L) do s[it] = s[it] - shift end
+
+    local function fit(r, useIn, useOut)
+      local L = layers[r]
+      if #L == 0 then return end
+      local t, w, gap = {}, {}, {}
+      for i, it in ipairs(L) do
+        local sum, ws = 0, 0
+        local ch = it.chain
+        if ch then
+          -- Fusion draws the link straight from a to b, so its dummies sit on that line.
+          sum, ws = CHAIN_W * (s[ch.a] + (s[ch.b] - s[ch.a]) * ch.t), CHAIN_W
+        elseif useIn then
+          for _, sg in ipairs(inSeg[it]) do
+            sum = sum + sg.w * (s[sg.a] - sg.slot * sp.node)
+            ws = ws + sg.w
+          end
+        end
+        if useOut and not ch then
+          for _, sg in ipairs(outSeg[it]) do
+            sum = sum + sg.w * (s[sg.b] + sg.slot * sp.node)
+            ws = ws + sg.w
+          end
+        end
+        if ws > 0 then
+          t[i], w[i] = sum / ws, ws
+        else
+          t[i], w[i] = s[it], 1e-3
+        end
+        gap[i] = i > 1 and gapBetween(L[i - 1], it) or 0
+      end
+      local y = fitLayer(t, w, gap)
+      for i, it in ipairs(L) do s[it] = y[i] end
+    end
+
+    for _ = 1, o.straighten do
+      for r = 1, nLayers - 1 do fit(r, true, false) end
+      for r = nLayers - 2, 0, -1 do fit(r, false, true) end
+    end
+    for _ = 1, 4 do
+      for r = 0, nLayers - 1 do fit(r, true, true) end
+      for r = nLayers - 1, 0, -1 do fit(r, true, true) end
+    end
+    return s
   end
 
-  local function fit(r, useIn, useOut)
-    local L = layers[r]
-    if #L == 0 then return end
-    local t, w, gap = {}, {}, {}
-    for i, it in ipairs(L) do
-      local sum, ws = 0, 0
-      local ch = it.chain
-      if ch then
-        -- Fusion draws the link straight from a to b, so its dummies sit on that line.
-        sum, ws = CHAIN_W * (s[ch.a] + (s[ch.b] - s[ch.a]) * ch.t), CHAIN_W
-      elseif useIn then
-        for _, sg in ipairs(inSeg[it]) do
-          sum = sum + sg.w * (s[sg.a] - sg.slot * sp.node)
-          ws = ws + sg.w
+  -- Swap neighbours in a column while that lowers the number of links drawn
+  -- behind tiles and adds no crossings.
+  local function throughTiles(s)
+    local hits = {}
+    for _, l in ipairs(links) do
+      local ra, rb, sa, sb = R[l.a.rank], R[l.b.rank], s[l.a], s[l.b]
+      for r = l.a.rank, l.b.rank do
+        for i, it in ipairs(layers[r]) do
+          if it.node and it ~= l.a and it ~= l.b then
+            local hr, hs = extent(it, "r") / 2 - 0.05, extent(it, "s") / 2 - 0.05
+            local r0, r1 = math.max(ra, R[r] - hr), math.min(rb, R[r] + hr)
+            if r0 <= r1 then
+              local s0 = sa + (sb - sa) * (r0 - ra) / (rb - ra)
+              local s1 = sa + (sb - sa) * (r1 - ra) / (rb - ra)
+              if math.max(s0, s1) > s[it] - hs and math.min(s0, s1) < s[it] + hs then
+                hits[#hits + 1] = { r = r, i = i, link = l }
+              end
+            end
+          end
         end
       end
-      if useOut and not ch then
-        for _, sg in ipairs(outSeg[it]) do
-          sum = sum + sg.w * (s[sg.b] + sg.slot * sp.node)
-          ws = ws + sg.w
-        end
-      end
-      if ws > 0 then
-        t[i], w[i] = sum / ws, ws
-      else
-        t[i], w[i] = s[it], 1e-3
-      end
-      gap[i] = i > 1 and gapBetween(L[i - 1], it) or 0
     end
-    local y = fitLayer(t, w, gap)
-    for i, it in ipairs(L) do s[it] = y[i] end
+    return hits
   end
 
-  for _ = 1, o.straighten do
-    for r = 1, nLayers - 1 do fit(r, true, false) end
-    for r = nLayers - 2, 0, -1 do fit(r, false, true) end
-  end
-  for _ = 1, 4 do
-    for r = 0, nLayers - 1 do fit(r, true, true) end
-    for r = nLayers - 1, 0, -1 do fit(r, true, true) end
+  local s = assign()
+  local hits = throughTiles(s)
+  local budget, deadline = o.untangle, os.clock() + 1
+  while #hits > 0 and budget > 0 and os.clock() < deadline do
+    local tried, accepted = {}, false
+    for _, h in ipairs(hits) do
+      local cand = { { h.r, h.i - 1 }, { h.r, h.i } }
+      local d = h.link.dummy[h.r]
+      if d then
+        for j, it in ipairs(layers[h.r]) do
+          if it == d then cand[#cand + 1] = { h.r, j - 1 }; cand[#cand + 1] = { h.r, j } end
+        end
+      end
+      for _, c in ipairs(cand) do
+        local r, i = c[1], c[2]
+        local L = layers[r]
+        local key = r .. ":" .. i
+        if i >= 1 and i < #L and not tried[key] and budget > 0 then
+          tried[key], budget = true, budget - 1
+          L[i], L[i + 1] = L[i + 1], L[i]
+          if totalCrossings() <= bestC then
+            local s2 = assign()
+            local h2 = throughTiles(s2)
+            if #h2 < #hits then
+              s, hits, accepted = s2, h2, true
+              break
+            end
+          end
+          L[i], L[i + 1] = L[i + 1], L[i]
+        end
+      end
+      if accepted then break end
+    end
+    if not accepted then break end
   end
 
   local pos = {}
   for _, it in ipairs(items) do
-    if it.node then pos[it.node] = { r = it.rank * sp.layer, s = s[it] } end
+    if it.node then pos[it.node] = { r = R[it.rank], s = s[it] } end
   end
-  return pos, (nLayers - 1) * sp.layer, bestC
+  return pos, R[nLayers - 1], bestC
 end
 
---[[
-Pure layout.
-  nodes[i] = { x = , y = }  current flow positions
-  edges[k] = { from = i, to = j, slot = int, main = bool }
-    slot: 0 = main input, -1, -2 ... above (Foreground), 1, 2 ... below (masks)
-  opts.anchor = i keeps node i at its current position.
-  opts.obstacles = { {x=, y=}, ... } tiles that stay put and must not be covered.
-Returns positions[i] = { x = , y = }, info  or nil, err.
-]]
-function M.layout(nodes, edges, opts)
-  local o = copyDefaults(opts)
-
-  -- merge duplicate links between the same two nodes
+local function mergeEdges(nodes, edges)
   local uniq, byKey = {}, {}
   for _, e in ipairs(edges) do
     if e.from ~= e.to and nodes[e.from] and nodes[e.to] then
-      local key = e.from .. ">" .. e.to
+      local key = tostring(e.from) .. ">" .. tostring(e.to)
       local cur = byKey[key]
       if not cur then
         cur = { from = e.from, to = e.to, slot = e.slot or 0, main = e.main }
@@ -451,18 +523,13 @@ function M.layout(nodes, edges, opts)
       end
     end
   end
-  edges = uniq
+  return uniq
+end
 
-  local dir = o.direction
-  if dir ~= "horizontal" and dir ~= "vertical" then
-    local dx, dy = 0, 0
-    for _, e in ipairs(edges) do
-      dx = dx + math.abs(nodes[e.to].x - nodes[e.from].x)
-      dy = dy + math.abs(nodes[e.to].y - nodes[e.from].y)
-    end
-    dir = (dy > dx) and "vertical" or "horizontal"
-  end
+-- Lay out every connected component and stack them across the flow.
+local function arrange(nodes, edges, o, dir)
   local sp = o[dir]
+  local sizes = o.sizes or {}
   local function rs(n)
     if dir == "horizontal" then return n.x, n.y end
     return n.y, n.x
@@ -503,7 +570,6 @@ function M.layout(nodes, edges, opts)
     minS0 = math.min(minS0, s)
   end
 
-  -- lay out each tree; stack them in their current order across the flow
   local comps = {}
   for _, g in ipairs(order) do
     local G = groups[g]
@@ -511,9 +577,10 @@ function M.layout(nodes, edges, opts)
     if not pos then return nil, width end
     local sum, smin, smax = 0, math.huge, -math.huge
     for _, i in ipairs(G.nodes) do
+      local half = ((sizes[i] and sizes[i].s or 1) - 1) / 2
       sum = sum + origS[i]
-      smin = math.min(smin, pos[i].s)
-      smax = math.max(smax, pos[i].s)
+      smin = math.min(smin, pos[i].s - half)
+      smax = math.max(smax, pos[i].s + half)
     end
     comps[#comps + 1] = { nodes = G.nodes, pos = pos, width = width,
       key = sum / #G.nodes, smin = smin, smax = smax, crossings = crossings }
@@ -533,29 +600,202 @@ function M.layout(nodes, edges, opts)
     cursor = cursor + (c.smax - c.smin) + sp.node + o.componentGap
     crossings = crossings + c.crossings
   end
-  local a = o.anchor
-  if a and out[a] then
-    local dx, dy = nodes[a].x - out[a].x, nodes[a].y - out[a].y
+  return out, { direction = dir, components = #comps, crossings = crossings }
+end
+
+-- Each cluster (an Underlay and the tools inside it) is laid out on its own,
+-- then placed as one big tile.
+local function acyclic(edges, owner)
+  local succ, indeg, all = {}, {}, {}
+  local function id(i) return owner[i] and ("cluster:" .. owner[i]) or i end
+  for _, e in ipairs(edges) do
+    local a, b = id(e.from), id(e.to)
+    if a ~= b then
+      succ[a] = succ[a] or {}
+      table.insert(succ[a], b)
+      indeg[b] = (indeg[b] or 0) + 1
+      all[a], all[b] = true, true
+    end
+  end
+  local queue, n, seen = {}, 0, 0
+  for v in pairs(all) do
+    n = n + 1
+    if not indeg[v] then queue[#queue + 1] = v end
+  end
+  local head = 1
+  while head <= #queue do
+    local v = queue[head]
+    head, seen = head + 1, seen + 1
+    for _, w in ipairs(succ[v] or {}) do
+      indeg[w] = indeg[w] - 1
+      if indeg[w] == 0 then queue[#queue + 1] = w end
+    end
+  end
+  return seen == n
+end
+
+local function arrangeClustered(nodes, edges, o, dir)
+  -- A frame that a path leaves and re-enters would make a cycle; such frames are dropped.
+  local owner, blocks, dropped = {}, {}, {}
+  for k, c in ipairs(o.clusters) do
+    local members = {}
+    for _, i in ipairs(c.members or {}) do
+      if nodes[i] and not owner[i] then owner[i] = k; members[#members + 1] = i end
+    end
+    if #members > 0 then
+      if acyclic(edges, owner) then
+        blocks[k] = { members = members, pad = c.pad or {} }
+      else
+        for _, i in ipairs(members) do owner[i] = nil end
+        dropped[#dropped + 1] = k
+      end
+    end
+  end
+
+  local cnodes, sizes = {}, {}
+  for i, n in pairs(nodes) do if not owner[i] then cnodes[i] = n end end
+  for k, b in pairs(blocks) do
+    local sub, subEdges, ix = {}, {}, {}
+    local mx, my = 0, 0
+    for j, i in ipairs(b.members) do
+      sub[j], ix[i] = nodes[i], j
+      mx, my = mx + nodes[i].x, my + nodes[i].y
+    end
+    for _, e in ipairs(edges) do
+      if ix[e.from] and ix[e.to] then
+        subEdges[#subEdges + 1] = { from = ix[e.from], to = ix[e.to], slot = e.slot, main = e.main }
+      end
+    end
+    local so = copyDefaults(o)
+    so.direction, so.clusters, so.anchor, so.obstacles, so.sizes = dir, nil, nil, nil, nil
+    local rel, err = M.layout(sub, subEdges, so)
+    if not rel then return nil, err end
+    local p = b.pad
+    local x0, x1, y0, y1 = math.huge, -math.huge, math.huge, -math.huge
+    for j in ipairs(b.members) do
+      x0, x1 = math.min(x0, rel[j].x), math.max(x1, rel[j].x)
+      y0, y1 = math.min(y0, rel[j].y), math.max(y1, rel[j].y)
+    end
+    b.rel = rel
+    b.box = { left = x0 - (p.left or 0.5), right = x1 + (p.right or 0.5),
+              top = y0 - (p.top or 0.5), bottom = y1 + (p.bottom or 0.5) }
+    b.key = "cluster:" .. k
+    cnodes[b.key] = { x = mx / #b.members, y = my / #b.members }
+    local w, h = b.box.right - b.box.left, b.box.bottom - b.box.top
+    sizes[b.key] = (dir == "horizontal") and { r = w, s = h } or { r = h, s = w }
+  end
+
+  local cedges = {}
+  for _, e in ipairs(edges) do
+    local a = owner[e.from] and blocks[owner[e.from]].key or e.from
+    local z = owner[e.to] and blocks[owner[e.to]].key or e.to
+    cedges[#cedges + 1] = { from = a, to = z, slot = e.slot, main = e.main }
+  end
+  local co = copyDefaults(o)
+  co.sizes = sizes
+  local out, info = arrange(cnodes, mergeEdges(cnodes, cedges), co, dir)
+  if not out then return nil, info end
+
+  info.clusters, info.dropped = {}, dropped
+  for k, b in pairs(blocks) do
+    local c = out[b.key]
+    out[b.key] = nil
+    local cx = snap((b.box.left + b.box.right) / 2, o.snap)
+    local cy = snap((b.box.top + b.box.bottom) / 2, o.snap)
+    local dx, dy = c.x - cx, c.y - cy
+    for j, i in ipairs(b.members) do out[i] = { x = b.rel[j].x + dx, y = b.rel[j].y + dy } end
+    info.clusters[k] = { left = b.box.left + dx, right = b.box.right + dx,
+                         top = b.box.top + dy, bottom = b.box.bottom + dy }
+  end
+  return out, info
+end
+
+--[[
+Pure layout.
+  nodes[i] = { x = , y = }  current flow positions
+  edges[k] = { from = i, to = j, slot = int, main = bool }
+    slot: 0 = main input, -1, -2 ... above (Foreground), 1, 2 ... below (masks)
+  opts.anchor = i keeps node i at its current position.
+  opts.obstacles = { {x=, y=, w=, h=}, ... } boxes that stay put and must not be covered
+    (w, h default to one tile).
+  opts.clusters = { {members = {i, ...}, pad = {left=, right=, top=, bottom=}}, ... }
+    nodes kept together inside a frame; info.clusters[k] is the frame's new box.
+Returns positions[i] = { x = , y = }, info  or nil, err.
+]]
+function M.layout(nodes, edges, opts)
+  local o = copyDefaults(opts)
+  edges = mergeEdges(nodes, edges)
+
+  local dir = o.direction
+  if dir ~= "horizontal" and dir ~= "vertical" then
+    local dx, dy = 0, 0
+    for _, e in ipairs(edges) do
+      dx = dx + math.abs(nodes[e.to].x - nodes[e.from].x)
+      dy = dy + math.abs(nodes[e.to].y - nodes[e.from].y)
+    end
+    dir = (dy > dx) and "vertical" or "horizontal"
+  end
+
+  local out, info
+  if o.clusters and #o.clusters > 0 then
+    out, info = arrangeClustered(nodes, edges, o, dir)
+    if not out then return nil, info end
+  else
+    out, info = arrange(nodes, edges, o, dir)
+    if not out then return nil, info end
+  end
+  info.clusters = info.clusters or {}
+  info.dropped = info.dropped or {}
+
+  local function move(dx, dy)
     for _, p in pairs(out) do p.x, p.y = p.x + dx, p.y + dy end
+    for _, c in pairs(info.clusters) do
+      c.left, c.right, c.top, c.bottom = c.left + dx, c.right + dx, c.top + dy, c.bottom + dy
+    end
+  end
+
+  local a = o.anchor
+  local anchored = a and out[a]
+  if anchored then
+    move(nodes[a].x - out[a].x, nodes[a].y - out[a].y)
     out[a] = { x = nodes[a].x, y = nodes[a].y }
   end
 
-  -- Keep clear of tiles that are not being arranged. Without an anchor the
+  -- Keep clear of boxes that are not being arranged. Without an anchor the
   -- block slides across the flow; an anchored block stays and overlaps are reported.
   local obstacles = o.obstacles or {}
+  local bodies = {}
+  local inCluster = {}
+  for _, c in pairs(info.clusters) do
+    bodies[#bodies + 1] = { x = (c.left + c.right) / 2, y = (c.top + c.bottom) / 2,
+                            w = c.right - c.left, h = c.bottom - c.top }
+  end
+  for k, c in ipairs(o.clusters or {}) do
+    if info.clusters[k] then
+      for _, i in ipairs(c.members or {}) do inCluster[i] = true end
+    end
+  end
+  for i, p in pairs(out) do
+    if not inCluster[i] then bodies[#bodies + 1] = { p = p } end
+  end
   local function overlaps(ds)
     local sx, sy = 0, ds
     if dir == "vertical" then sx, sy = ds, 0 end
     local n = 0
-    for _, p in pairs(out) do
+    for _, b in ipairs(bodies) do
+      local bx, by = (b.p and b.p.x or b.x) + sx, (b.p and b.p.y or b.y) + sy
+      local bw, bh = b.w or 1, b.h or 1
       for _, q in ipairs(obstacles) do
-        if math.abs(p.x + sx - q.x) < 1 - EPS and math.abs(p.y + sy - q.y) < 1 - EPS then n = n + 1 end
+        if math.abs(bx - q.x) < (bw + (q.w or 1)) / 2 - EPS
+          and math.abs(by - q.y) < (bh + (q.h or 1)) / 2 - EPS then
+          n = n + 1
+        end
       end
     end
     return n
   end
-  local hits = overlaps(0)
-  if hits > 0 and not (a and out[a]) then
+  local hits = (#obstacles > 0) and overlaps(0) or 0
+  if hits > 0 and not anchored then
     local step = (o.snap and o.snap > 0) and o.snap or 0.25
     for k = 1, 4000 do
       local ds
@@ -563,15 +803,14 @@ function M.layout(nodes, edges, opts)
         if overlaps(sign * k * step) == 0 then ds = sign * k * step break end
       end
       if ds then
-        for _, p in pairs(out) do
-          if dir == "horizontal" then p.y = p.y + ds else p.x = p.x + ds end
-        end
+        if dir == "horizontal" then move(0, ds) else move(ds, 0) end
         hits = 0
         break
       end
     end
   end
-  return out, { direction = dir, components = #comps, crossings = crossings, overlaps = hits }
+  info.overlaps = hits
+  return out, info
 end
 
 local SKIP_TYPES = { Note = true, Underlay = true }
@@ -653,6 +892,49 @@ local function toolEdges(tool, index)
   return list
 end
 
+-- An Underlay's size exists only in its saved settings (ViewInfo.Size, in pixels).
+-- SetPos puts its top-left corner where a tile at the same position has its own.
+local PX_X, PX_Y = 110, 33                  -- ViewInfo pixels per flow unit
+local TILE_HW, TILE_HH = 43 / PX_X, 8 / PX_Y  -- half a tile, in flow units
+
+local function underlayRect(comp, flow, u)
+  local x, y = flow:GetPos(u)
+  local st = comp:CopySettings(u)
+  local t = st and st.Tools and st.Tools[u.Name]
+  local size = t and t.ViewInfo and t.ViewInfo.Size
+  if not (x and size) then return nil end
+  local left, top = x - TILE_HW, y - TILE_HH
+  return { left = left, top = top, right = left + size[1] / PX_X, bottom = top + size[2] / PX_Y }
+end
+
+-- Returns the Underlay, which is a new tool when it had to be resized.
+local function setUnderlayRect(comp, flow, u, r, old)
+  local w, h = r.right - r.left, r.bottom - r.top
+  if math.abs(w - (old.right - old.left)) > 1e-6 or math.abs(h - (old.bottom - old.top)) > 1e-6 then
+    -- Size cannot be set on a live tool: paste a resized copy in its place.
+    local name = u.Name
+    local st = comp:CopySettings(u)
+    st.Tools[name].ViewInfo.Size = { w * PX_X, h * PX_Y }
+    u:Delete()
+    flow:Select()
+    comp:Paste(st)
+    u = comp:FindTool(name)
+    if not u then return nil end
+  end
+  flow:SetPos(u, r.left + TILE_HW, r.top + TILE_HH)
+  return u
+end
+
+local function framePad(rect, members, posOf)
+  local x0, x1, y0, y1 = math.huge, -math.huge, math.huge, -math.huge
+  for _, t in ipairs(members) do
+    local x, y = posOf(t)
+    x0, x1, y0, y1 = math.min(x0, x), math.max(x1, x), math.min(y0, y), math.max(y1, y)
+  end
+  return { left = x0 - rect.left, right = rect.right - x1, top = y0 - rect.top, bottom = rect.bottom - y1 },
+         { left = x0, right = x1, top = y0, bottom = y1 }
+end
+
 -- opts: direction = "auto"|"horizontal"|"vertical"; selected = false to ignore
 -- the selection; apply = false computes the layout without moving anything.
 -- 2+ selected tools: only those are arranged. Otherwise the whole comp is.
@@ -702,15 +984,58 @@ function M.run(comp, opts)
 
   local layoutOpts = copyDefaults(opts)
   layoutOpts.anchor = anchorTool and index[anchorTool]
-  layoutOpts.obstacles = {}
+  layoutOpts.obstacles, layoutOpts.clusters = {}, {}
+  local everything = (scope == "comp") and tools or gather(false)
   if scope == "selection" then
-    for _, t in ipairs(gather(false)) do
+    for _, t in ipairs(everything) do
       if not index[t] then
         local x, y = flow:GetPos(t)
         table.insert(layoutOpts.obstacles, { x = x, y = y })
       end
     end
   end
+
+  -- A tool belongs to the outermost Underlay its centre is in; that Underlay
+  -- and its tools move as one block. Nested Underlays are refitted after.
+  local frames = {}
+  for _, u in pairs(comp:GetToolList(false, "Underlay") or {}) do
+    local r = topLevel(u) == u and underlayRect(comp, flow, u)
+    if r then frames[#frames + 1] = { tool = u, rect = r, members = {}, inner = {} } end
+  end
+  local function area(r) return (r.right - r.left) * (r.bottom - r.top) end
+  for _, t in ipairs(everything) do
+    local x, y = flow:GetPos(t)
+    local outer, inner
+    for _, f in ipairs(frames) do
+      local r = f.rect
+      if x > r.left and x < r.right and y > r.top and y < r.bottom then
+        if not outer or area(r) > area(outer.rect) then outer = f end
+        if not inner or area(r) < area(inner.rect) then inner = f end
+      end
+    end
+    if outer then table.insert(outer.members, t) end
+    if inner and inner ~= outer then table.insert(inner.inner, t) end
+  end
+  local function oldPos(t) return flow:GetPos(t) end
+  local clusterFrame = {}
+  for _, f in ipairs(frames) do
+    local arranged = 0
+    for _, t in ipairs(f.members) do if index[t] then arranged = arranged + 1 end end
+    if arranged > 0 and arranged == #f.members then
+      local ids = {}
+      for _, t in ipairs(f.members) do ids[#ids + 1] = index[t] end
+      table.insert(layoutOpts.clusters, { members = ids, pad = framePad(f.rect, f.members, oldPos) })
+      clusterFrame[#layoutOpts.clusters] = f
+    elseif arranged == 0 and scope == "selection" and #f.inner == 0 then
+      local r = f.rect
+      table.insert(layoutOpts.obstacles, { x = (r.left + r.right) / 2, y = (r.top + r.bottom) / 2,
+        w = r.right - r.left, h = r.bottom - r.top })
+    end
+    local allInner = #f.inner > 0
+    for _, t in ipairs(f.inner) do allInner = allInner and index[t] ~= nil end
+    if allInner then f.innerPad = framePad(f.rect, f.inner, oldPos) end
+  end
+
   local pos, info = M.layout(nodes, edges, layoutOpts)
   if not pos then print("[NodeArrange] " .. tostring(info)) return end
   if opts.apply == false then return pos, info, tools, edges end
@@ -718,15 +1043,34 @@ function M.run(comp, opts)
   comp:StartUndo("Arrange Nodes")
   for i, t in ipairs(tools) do flow:QueueSetPos(t, pos[i].x, pos[i].y) end
   flow:FlushSetPosQueue()
+  local moved = {}
+  for k, r in pairs(info.clusters) do
+    local f = clusterFrame[k]
+    moved[#moved + 1] = setUnderlayRect(comp, flow, f.tool, r, f.rect)
+  end
+  for _, f in ipairs(frames) do
+    if f.innerPad then
+      local _, box = framePad(f.rect, f.inner, function(t) local p = pos[index[t]] return p.x, p.y end)
+      local p = f.innerPad
+      local r = { left = box.left - p.left, right = box.right + p.right,
+                  top = box.top - p.top, bottom = box.bottom + p.bottom }
+      moved[#moved + 1] = setUnderlayRect(comp, flow, f.tool, r, f.rect)
+    end
+  end
   comp:EndUndo(true)
 
   flow:Select()
   for _, t in ipairs(tools) do flow:Select(t, true) end
+  for _, u in pairs(moved) do flow:Select(u, true) end
   if layoutOpts.anchor then comp:SetActiveTool(anchorTool) end
 
-  print(string.format("[NodeArrange] %d tools (%s), %d links, %s, %d trees, %d crossings, anchor %s",
-    #tools, scope, #edges, info.direction, info.components, info.crossings,
+  print(string.format("[NodeArrange] %d tools (%s), %d links, %s, %d trees, %d crossings, %d underlays, anchor %s",
+    #tools, scope, #edges, info.direction, info.components, info.crossings, #moved,
     layoutOpts.anchor and anchorTool.Name or "none"))
+  for _, k in ipairs(info.dropped) do
+    print(string.format("[NodeArrange] %s: a link leaves it and comes back, so its tools were arranged on their own",
+      clusterFrame[k] and clusterFrame[k].tool.Name or "underlay"))
+  end
   if info.overlaps > 0 then
     print(string.format("[NodeArrange] %d tiles overlap unselected tools%s", info.overlaps,
       layoutOpts.anchor and ("; the anchor " .. anchorTool.Name .. " was kept in place") or ""))

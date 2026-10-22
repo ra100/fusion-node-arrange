@@ -21,7 +21,11 @@ Node Arrange:
 4. **Placement.** For each column, a weighted least-squares fit with minimum
    spacing. Main inputs weigh most, so the main image path is a straight line.
    Foreground sources go one row above the node they feed, masks one row below.
-5. **Separate trees** are stacked and right-aligned on their outputs.
+   A long link's placeholders are held on the straight line Fusion draws.
+5. **Links behind tiles.** Where a link would still pass behind a tile,
+   neighbouring tiles in a column are swapped if that removes the overlap
+   without adding crossings.
+6. **Separate trees** are stacked and right-aligned on their outputs.
 
 Other behaviour:
 
@@ -31,9 +35,18 @@ Other behaviour:
   position and the layout is built around it. With exactly one tool selected,
   that tool is the anchor. Without an active tool, the layout is right-aligned
   on the old outputs.
-- After a run, every arranged tool is selected, so the block can be moved
-  straight away.
-- Groups and Macros count as one tile. Notes and Underlays are not moved.
+- **Selection and the rest of the comp:** when only a selection is arranged,
+  the result is moved across the flow until it covers no other tool or
+  Underlay. With an active tool, the active tool stays put instead, and the
+  Console reports any overlap.
+- **Underlays:** a tool belongs to an Underlay when its centre is inside it.
+  An Underlay and its tools are arranged as one block, and the Underlay is
+  resized around them with its old margins. If a link leaves the Underlay and
+  comes back into it, that Underlay cannot be kept as one block: its tools are
+  arranged on their own and the Console says so.
+- After a run, every arranged tool and Underlay is selected, so the block can
+  be moved straight away.
+- Groups and Macros count as one tile. Notes are not moved.
 - Each run is one undo step.
 - **Arrange Nodes** picks horizontal or vertical from the comp's current links.
   **Arrange Nodes Horizontal** and **Arrange Nodes Vertical** force a direction.
@@ -95,7 +108,7 @@ cp "$SRC/Config/NodeArrange.fu" "$DST/Config/"   # Fusion Studio menu bar entry
   under "Node Arrange" in View > Customize Hotkeys, where you can bind keys.
 
 The Console (Workspace > Console) shows one summary line per run, for example
-`[NodeArrange] 14 tools (comp), 14 links, horizontal, 1 trees, 0 crossings, anchor Merge1`.
+`[NodeArrange] 14 tools (comp), 14 links, horizontal, 1 trees, 0 crossings, 1 underlays, anchor Merge1`.
 
 ## Settings
 
@@ -108,6 +121,7 @@ Fusion grid units (one tile = 1):
 | `horizontal.node` / `vertical.node` | 1.5 / 1.5 | distance between tiles in a column |
 | `componentGap` | 1.0 | extra space between separate trees |
 | `snap` | 0.25 | grid rounding, 0 disables |
+| `untangle` | 200 | swap tries (at most 1 s) to move links off tiles |
 
 From a script you can also call it directly:
 
@@ -119,10 +133,14 @@ local pos, info = NA.run(comp, { apply = false })      -- dry run, moves nothing
 
 ## Limits
 
-- Fusion draws links as straight lines, so a link that skips several columns
-  can still pass behind tiles. Inserting PipeRouters would fix it but changes
-  the comp, so it is not done.
-- Nodes inside an Underlay are moved like any other node and may leave it.
+- Fusion draws links as straight lines. Some links that skip several columns
+  still pass behind a tile when no swap can fix it without adding crossings.
+  PipeRouters are not inserted, because that would change the comp.
+- Resizing an Underlay replaces it with a pasted copy of the same name,
+  comments and colour. Scripts that hold a reference to the old Underlay
+  object have to look it up again.
+- Nested Underlays: the outer one is kept as a block; inner ones are refitted
+  around their tools afterwards and may overlap other tiles.
 
 ## How it is built
 
@@ -130,6 +148,8 @@ local pos, info = NA.run(comp, { apply = false })      -- dry run, moves nothing
   with no Fusion calls. `M.run` is the thin Fusion part: it reads the flow,
   then moves tools with `FlowView:QueueSetPos` / `FlushSetPosQueue` inside one
   undo block.
+- An Underlay's size exists only in its saved settings (`ViewInfo.Size`), so
+  it is read with `CopySettings` and changed by pasting a resized copy.
 - The three scripts in `Scripts/Comp/Node Arrange/` are one line each:
   `require("NodeArrange").run(...)`. Fusion's `package.path` already includes
   every `LuaModules:` folder, Reactor's `Deploy` among them.
@@ -153,20 +173,26 @@ python3 tests/test_layout.py /tmp/nodearrange_out
 
 Each case is checked in both directions: every link points downstream, no tiles
 overlap, re-running on the result does not add crossings (a crossing-free
-layout must not move at all), and an anchored run keeps the anchor in place.
-PNG previews go to the output folder. Cases: a real Resolve comp snapshot, a
+layout must not move at all), an anchored run keeps the anchor in place, an
+arranged half of the graph covers none of the other half, and Underlay frames
+hold exactly their own tools. The `through-tiles` column counts links that
+pass behind a tile (60 before the swap step, 47 after, over all cases). PNG
+previews go to the output folder. Cases: a real Resolve comp snapshot, a
 synthetic keying comp, and random graphs.
 
 The Fusion part is tested against a running Fusion Studio. The test opens a new
-comp, runs this checkout's module, checks positions, selection, anchor and
-undo, then closes the comp without saving:
+comp, runs this checkout's module, checks positions, selection, anchor,
+overlap with unselected tools, Underlay refit, undo, and a non-ASCII tool name
+with the module loaded from a non-ASCII folder. It then closes the comp without
+saving:
 
 ```bash
 cd /opt/BlackmagicDesign/Fusion21 && python3 /path/to/tests/test_fusion.py
 ```
 
-Tested on: Fusion Studio 21, Linux. Not yet tested: Windows, macOS, Resolve,
-and non-ASCII user folders ([#3](https://github.com/ra100/fusion-node-arrange/issues/3)).
+Tested on: Fusion Studio 21, Linux. Not yet tested: Windows, macOS, Resolve.
+Windows with a non-ASCII user folder is the case most likely to differ
+([#3](https://github.com/ra100/fusion-node-arrange/issues/3)).
 
 ## Disclosure
 

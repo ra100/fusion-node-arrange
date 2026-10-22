@@ -37,11 +37,17 @@ def run_layout(lua, M, names, links, positions, opts=None):
     opts = dict(opts or {})
     if "obstacles" in opts:
         opts["obstacles"] = lua.table_from([lua.table_from({"x": x, "y": y}) for x, y in opts["obstacles"]])
+    if "clusters" in opts:
+        opts["clusters"] = lua.table_from([
+            lua.table_from({"members": lua.table_from([idx[n] for n in c])}) for c in opts["clusters"]
+        ])
     pos, info = M.layout(nodes, edges, lua.table_from(opts))
     if pos is None:
         raise RuntimeError(info)
     out = {n: (pos[idx[n]].x, pos[idx[n]].y) for n in names}
-    return out, dict(info)
+    info = dict(info)
+    info["clusters"] = {k: (c.left, c.right, c.top, c.bottom) for k, c in info["clusters"].items()}
+    return out, info
 
 
 def check(names, links, pos, direction):
@@ -54,6 +60,27 @@ def check(names, links, pos, direction):
         for b in names[i + 1:]:
             if abs(pos[a][0] - pos[b][0]) < 1 - 1e-6 and abs(pos[a][1] - pos[b][1]) < 1 - 1e-6:
                 errors.append(f"overlap {a} {b}")
+    return errors
+
+
+def check_clusters(names, pos, clusters, boxes):
+    """Members inside their frame, nothing else inside it, frames apart."""
+    errors = []
+    for k, members in enumerate(clusters, 1):
+        if k not in boxes:
+            continue
+        l, r, t, b = boxes[k]
+        for n in names:
+            x, y = pos[n]
+            inside = l < x < r and t < y < b
+            if n in members and not (l + 0.5 - 1e-6 <= x <= r - 0.5 + 1e-6 and t + 0.5 - 1e-6 <= y <= b - 0.5 + 1e-6):
+                errors.append(f"{n} outside its frame {k}")
+            if n not in members and (abs(x - (l + r) / 2) < (r - l + 1) / 2 - 1e-6
+                                     and abs(y - (t + b) / 2) < (b - t + 1) / 2 - 1e-6):
+                errors.append(f"{n} overlaps frame {k}")
+        for k2, (l2, r2, t2, b2) in boxes.items():
+            if k2 > k and l < r2 and l2 < r and t < b2 and t2 < b:
+                errors.append(f"frames {k} and {k2} overlap")
     return errors
 
 
@@ -79,7 +106,7 @@ def links_through_tiles(names, links, pos, half=0.45):
     return sum(1 for a, b, _, _ in links for n in names if n not in (a, b) and hits(pos[a], pos[b], pos[n]))
 
 
-def render(path, names, links, pos):
+def render(path, names, links, pos, frames=None):
     from PIL import Image, ImageDraw
 
     sx, sy = 110, 33
@@ -94,6 +121,8 @@ def render(path, names, links, pos):
     def c(n):
         return ((pos[n][0] - ox) * sx, (pos[n][1] - oy) * sy)
 
+    for l, r, t, b in (frames or {}).values():
+        d.rectangle([(l - ox) * sx, (t - oy) * sy, (r - ox) * sx, (b - oy) * sy], fill=(70, 66, 56), outline=(190, 180, 150))
     for a, b, slot, _ in links:
         col = (220, 200, 60) if slot == 0 else (90, 160, 255) if slot < 0 else (120, 220, 120)
         d.line([c(a), c(b)], fill=col, width=2)
@@ -219,11 +248,30 @@ def main():
             if covered or info4["overlaps"]:
                 errs.append(f"selection covers unselected tiles: {covered[:3]} overlaps={info4['overlaps']}")
             errs += check(sel, sel_links, pos4, direction)
+            # Underlays: each cluster is kept together inside its frame.
+            rnd = random.Random(name + direction)
+            clusters = [rnd.sample(names, 3), rnd.sample(names, 4)]
+            clusters[1] = [n for n in clusters[1] if n not in clusters[0]]
+            if name == "keying":
+                clusters = [["DeltaKeyer", "MatteCtrl", "GarbageMask"], ["BG", "BGBlur", "BGGrade"]]
+            pos5, info5 = run_layout(lua, M, names, links, positions,
+                                     {"direction": direction, "clusters": clusters})
+            errs += check(names, links, pos5, direction)
+            errs += check_clusters(names, pos5, clusters, info5["clusters"])
+            dropped = list(dict(info5["dropped"]).values())
+            if name == "keying" and dropped:
+                errs.append(f"keying clusters dropped {dropped}")
+            cl_note = f"{len(info5['clusters'])}kept/{len(dropped)}dropped"
+            try:
+                render(os.path.join(out_dir, f"{name}_{direction}_clusters.png"), names, links, pos5,
+                       info5["clusters"])
+            except ImportError:
+                pass
             status = "OK " if not errs else "FAIL"
             failed += bool(errs)
             through = links_through_tiles(names, links, pos)
             print(f"{status} {name:11s} {direction:10s} nodes={len(names):3d} trees={info['components']} "
-                  f"crossings={info['crossings']} through-tiles={through}")
+                  f"crossings={info['crossings']} through-tiles={through} clusters={cl_note}")
             for e in errs[:5]:
                 print("     ", e)
             try:
