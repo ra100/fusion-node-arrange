@@ -2,8 +2,8 @@ Atom {
 	Name = "Node Arrange",
 	Category = "Scripts/Flow",
 	Author = "ra100",
-	Version = 1.0,
-	Date = {2026, 10, 21},
+	Version = 1.1,
+	Date = {2026, 10, 22},
 	Description = [[<p>Blender-style "Arrange Nodes" for the Fusion node view. One click lays out the selected tools (or the whole comp) as a clean left-to-right or top-to-bottom flow.</p>
 
 <p>Layered (Sugiyama) layout, the same family of algorithm Blender's Node Arrange uses:</p>
@@ -15,6 +15,8 @@ Atom {
 	<li>Groups and Macros count as one tile. Notes and Underlays are not moved. One undo step.</li>
 </ul>
 
+<p>With 2+ tools selected only the selection is arranged, otherwise the whole comp. The active tool keeps its position, and the arranged tools are left selected.</p>
+
 <p>Usage:</p>
 <ul>
 	<li>Resolve: Workspace &gt; Scripts &gt; Comp &gt; Node Arrange &gt; Arrange Nodes / Horizontal / Vertical.</li>
@@ -24,6 +26,7 @@ Atom {
 <p>"Arrange Nodes" picks the flow direction from the comp's current links. Spacing is set in M.defaults at the top of Modules/Lua/NodeArrange.lua.</p>
 
 <p>Inspired by NodeAlign by Stefano / Prismanet (https://github.com/prismanetcom/nodealign).</p>
+<p>Written with an AI coding assistant (Claude) under the author's direction. Tested on Fusion Studio 21 (Linux).</p>
 <p>Source and issues: https://github.com/ra100/fusion-node-arrange</p>]],
 	Deploy = {
 		"Modules/Lua/NodeArrange.lua",

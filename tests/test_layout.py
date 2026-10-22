@@ -174,6 +174,15 @@ def main():
                 errs.append(f"not idempotent: {len(moved)} moved")
             if info2["crossings"] > info["crossings"]:
                 errs.append(f"re-run added crossings: {info['crossings']} -> {info2['crossings']}")
+            # Anchored: the anchor keeps its position, the rest is the same layout shifted.
+            anchor = names[len(names) // 2]
+            pos3, _ = run_layout(lua, M, names, links, positions,
+                                 {"direction": direction, "anchor": names.index(anchor) + 1})
+            if pos3[anchor] != tuple(positions[anchor]):
+                errs.append(f"anchor {anchor} moved: {positions[anchor]} -> {pos3[anchor]}")
+            dx, dy = pos3[anchor][0] - pos[anchor][0], pos3[anchor][1] - pos[anchor][1]
+            if any(abs(pos3[n][0] - pos[n][0] - dx) + abs(pos3[n][1] - pos[n][1] - dy) > 1e-6 for n in names):
+                errs.append("anchored layout differs from the unanchored one")
             status = "OK " if not errs else "FAIL"
             failed += bool(errs)
             print(f"{status} {name:11s} {direction:10s} nodes={len(names):3d} trees={info['components']} crossings={info['crossings']}")

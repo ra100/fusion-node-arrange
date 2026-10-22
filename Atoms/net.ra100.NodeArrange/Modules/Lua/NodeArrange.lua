@@ -2,28 +2,15 @@
 NodeArrange - Blender-style "Arrange Nodes" for Fusion Studio and the
 DaVinci Resolve Fusion page.
 
-Layered (Sugiyama) layout, the same family of algorithm Blender's Node Arrange
-uses:
-  1. Rank: every tool gets a column (layer). Sources start left, then each tool
-     is pulled right next to its nearest consumer so Loaders hug the node they
-     feed.
-  2. Long links get invisible dummy nodes in every column they cross, so they
-     are routed and straightened like real nodes.
-  3. Crossing reduction: barycenter sweeps up and down the layers, then
-     adjacent swaps. Two different starting orders, best result wins.
-  4. Coordinates: per layer, a weighted least-squares fit (pool adjacent
-     violators) pulls each node towards its neighbours while keeping minimum
-     spacing. Main inputs and long links weigh more, so the main image path
-     comes out straight. Foreground sources sit one row above, masks one row
-     below the node they feed.
-  5. Independent node trees are stacked, right-aligned on their outputs.
+Layered (Sugiyama) layout: columns by longest path, dummy nodes on long links,
+barycenter crossing reduction, then a weighted least-squares fit per column.
 
-The layout core (M.layout) is pure Lua; M.run(comp, opts) is the Fusion glue.
-Lua 5.1 compatible (Fusion and Resolve embed LuaJIT).
+M.layout is pure Lua 5.1 with no Fusion calls, so it is tested offline.
+M.run(comp, opts) is the Fusion glue.
 ]]
 
 local M = {}
-M.VERSION = "1.0"
+M.VERSION = "1.1"
 
 M.defaults = {
   -- "auto" picks horizontal or vertical from the comp's current links.
@@ -436,6 +423,7 @@ Pure layout.
   nodes[i] = { x = , y = }  current flow positions
   edges[k] = { from = i, to = j, slot = int, main = bool }
     slot: 0 = main input, -1, -2 ... above (Foreground), 1, 2 ... below (masks)
+  opts.anchor = i keeps node i at its current position.
 Returns positions[i] = { x = , y = }, info  or nil, err.
 ]]
 function M.layout(nodes, edges, opts)
@@ -538,12 +526,14 @@ function M.layout(nodes, edges, opts)
     cursor = cursor + (c.smax - c.smin) + sp.node + o.componentGap
     crossings = crossings + c.crossings
   end
+  local a = o.anchor
+  if a and out[a] then
+    local dx, dy = nodes[a].x - out[a].x, nodes[a].y - out[a].y
+    for _, p in pairs(out) do p.x, p.y = p.x + dx, p.y + dy end
+    out[a] = { x = nodes[a].x, y = nodes[a].y }
+  end
   return out, { direction = dir, components = #comps, crossings = crossings }
 end
-
-------------------------------------------------------------------------------
--- Fusion glue
-------------------------------------------------------------------------------
 
 local SKIP_TYPES = { Note = true, Underlay = true }
 local MAIN_IDS = {
@@ -625,8 +615,9 @@ local function toolEdges(tool, index)
 end
 
 -- opts: direction = "auto"|"horizontal"|"vertical"; selected = false to ignore
--- the selection (by default the selection is used when it has 2+ tools);
--- apply = false computes the layout without moving anything.
+-- the selection; apply = false computes the layout without moving anything.
+-- 2+ selected tools: only those are arranged. Otherwise the whole comp is.
+-- The anchor (a single selected tool, else the active tool) keeps its position.
 function M.run(comp, opts)
   opts = opts or {}
   local fu = fu or fusion or app
@@ -651,10 +642,12 @@ function M.run(comp, opts)
     return tools
   end
 
-  local tools = (opts.selected ~= false) and gather(true) or {}
-  local scope = "selection"
-  if #tools < 2 then tools, scope = gather(false), "comp" end
+  local selected = (opts.selected ~= false) and gather(true) or {}
+  local tools, scope = selected, "selection"
+  if #selected < 2 then tools, scope = gather(false), "comp" end
   if #tools == 0 then print("[NodeArrange] nothing to arrange") return end
+  local anchorTool = selected[1]
+  if #selected ~= 1 then anchorTool = topLevel(comp.ActiveTool) end
 
   local index, nodes, edges = {}, {}, {}
   for i, t in ipairs(tools) do
@@ -668,15 +661,24 @@ function M.run(comp, opts)
     end
   end
 
-  local pos, info = M.layout(nodes, edges, opts)
+  local layoutOpts = copyDefaults(opts)
+  layoutOpts.anchor = anchorTool and index[anchorTool]
+  local pos, info = M.layout(nodes, edges, layoutOpts)
   if not pos then print("[NodeArrange] " .. tostring(info)) return end
   if opts.apply == false then return pos, info, tools, edges end
 
   comp:StartUndo("Arrange Nodes")
-  for i, t in ipairs(tools) do flow:SetPos(t, pos[i].x, pos[i].y) end
+  for i, t in ipairs(tools) do flow:QueueSetPos(t, pos[i].x, pos[i].y) end
+  flow:FlushSetPosQueue()
   comp:EndUndo(true)
-  print(string.format("[NodeArrange] %d tools (%s), %d links, %s, %d trees, %d crossings",
-    #tools, scope, #edges, info.direction, info.components, info.crossings))
+
+  flow:Select()
+  for _, t in ipairs(tools) do flow:Select(t, true) end
+  if layoutOpts.anchor then comp:SetActiveTool(anchorTool) end
+
+  print(string.format("[NodeArrange] %d tools (%s), %d links, %s, %d trees, %d crossings, anchor %s",
+    #tools, scope, #edges, info.direction, info.components, info.crossings,
+    layoutOpts.anchor and anchorTool.Name or "none"))
 end
 
 return M

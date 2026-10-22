@@ -25,8 +25,14 @@ Node Arrange:
 
 Other behaviour:
 
-- With 2 or more tools selected, only the selection is arranged. Otherwise the
-  whole comp is.
+- **What gets arranged:** with 2 or more tools selected, only the selection.
+  With 0 or 1, the whole comp.
+- **Anchor:** the active tool (red border, the last one you clicked) keeps its
+  position and the layout is built around it. With exactly one tool selected,
+  that tool is the anchor. Without an active tool, the layout is right-aligned
+  on the old outputs.
+- After a run, every arranged tool is selected, so the block can be moved
+  straight away.
 - Groups and Macros count as one tile. Notes and Underlays are not moved.
 - Each run is one undo step.
 - **Arrange Nodes** picks horizontal or vertical from the comp's current links.
@@ -89,7 +95,7 @@ cp "$SRC/Config/NodeArrange.fu" "$DST/Config/"   # Fusion Studio menu bar entry
   under "Node Arrange" in View > Customize Hotkeys, where you can bind keys.
 
 The Console (Workspace > Console) shows one summary line per run, for example
-`[NodeArrange] 14 tools (comp), 14 links, horizontal, 1 trees, 0 crossings`.
+`[NodeArrange] 14 tools (comp), 14 links, horizontal, 1 trees, 0 crossings, anchor Merge1`.
 
 ## Settings
 
@@ -106,7 +112,7 @@ Fusion grid units (one tile = 1):
 From a script you can also call it directly:
 
 ```lua
-local NA = dofile(fu:MapPath("LuaModules:NodeArrange.lua"))
+local NA = require("NodeArrange")
 NA.run(comp, { direction = "vertical" })               -- arrange
 local pos, info = NA.run(comp, { apply = false })      -- dry run, moves nothing
 ```
@@ -118,9 +124,26 @@ local pos, info = NA.run(comp, { apply = false })      -- dry run, moves nothing
   the comp, so it is not done.
 - Nodes inside an Underlay are moved like any other node and may leave it.
 
+## How it is built
+
+- `Modules/Lua/NodeArrange.lua` holds everything. `M.layout` is pure Lua 5.1
+  with no Fusion calls. `M.run` is the thin Fusion part: it reads the flow,
+  then moves tools with `FlowView:QueueSetPos` / `FlushSetPosQueue` inside one
+  undo block.
+- The three scripts in `Scripts/Comp/Node Arrange/` are one line each:
+  `require("NodeArrange").run(...)`. Fusion's `package.path` already includes
+  every `LuaModules:` folder, Reactor's `Deploy` among them.
+- `Config/NodeArrange.fu` actions call those scripts with
+  `RunScript("Scripts:...")`. The path map resolves the user folder and
+  Reactor's `Deploy` folder alike.
+- Lua, not Python: Lua is built into Fusion Studio and Resolve, while Python
+  needs a separate install. The scripts do no file IO of their own, and tool
+  names are never processed as text, so non-ASCII names and paths are passed
+  through untouched.
+
 ## Tests
 
-The layout core is pure Lua 5.1, so it is tested outside Fusion through
+The layout core is tested outside Fusion through
 [lupa](https://pypi.org/project/lupa/):
 
 ```bash
@@ -129,9 +152,29 @@ python3 tests/test_layout.py /tmp/nodearrange_out
 ```
 
 Each case is checked in both directions: every link points downstream, no tiles
-overlap, and re-running on the result does not add crossings (a crossing-free
-layout must not move at all). PNG previews go to the output folder. Cases: a
-real Resolve comp snapshot, a synthetic keying comp, and random graphs.
+overlap, re-running on the result does not add crossings (a crossing-free
+layout must not move at all), and an anchored run keeps the anchor in place.
+PNG previews go to the output folder. Cases: a real Resolve comp snapshot, a
+synthetic keying comp, and random graphs.
+
+The Fusion part is tested against a running Fusion Studio. The test opens a new
+comp, runs this checkout's module, checks positions, selection, anchor and
+undo, then closes the comp without saving:
+
+```bash
+cd /opt/BlackmagicDesign/Fusion21 && python3 /path/to/tests/test_fusion.py
+```
+
+Tested on: Fusion Studio 21, Linux. Not yet tested: Windows, macOS, Resolve,
+and non-ASCII user folders ([#3](https://github.com/ra100/fusion-node-arrange/issues/3)).
+
+## Disclosure
+
+The code was written with an AI coding assistant (Claude, by Anthropic) under
+the author's direction. The tests above are what the tool is checked against;
+anything they do not cover is listed as untested.
+Bug reports and comps where the layout comes out wrong are welcome in the
+[issues](https://github.com/ra100/fusion-node-arrange/issues).
 
 ## Credits
 
