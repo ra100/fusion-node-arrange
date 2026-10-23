@@ -36,6 +36,8 @@ Node Arrange:
    spacing. Main inputs weigh most, so the main image path is a straight line.
    Foreground sources go one row above the node they feed, masks one row below.
    A long link's placeholders are held on the straight line Fusion draws.
+   With routers on, they are held level with each other instead, and a
+   PipeRouter goes where the link bends (see below).
 5. **Links behind tiles.** Where a link would still pass behind a tile,
    neighbouring tiles in a column are swapped if that removes the overlap
    without adding crossings.
@@ -126,6 +128,19 @@ cp "$SRC/Config/NodeArrange.fu" "$DST/Config/"   # Fusion Studio menu bar entry
   restart), or Scripts > Comp > Node Arrange. The three actions are listed
   under "Node Arrange" in View > Customize Hotkeys, where you can bind keys.
 
+**Arrange Nodes with Routers** also routes links that skip 3 or more columns
+through PipeRouters. Each such link runs level through the empty space between
+tiles and bends at a router next to one end: next to the source for a main
+input, so it enters its tool straight, and next to the target otherwise. Links
+that already run straight get no routers.
+
+The routers are named `NARouter1`, `NARouter2` and so on. Every run removes
+the `NARouter`s it arranges around and adds new ones where the new layout
+needs them, so re-running is stable. A plain **Arrange Nodes** removes them
+and wires the links directly again. PipeRouters with any other name are
+treated as ordinary tools. A `NARouter` whose source or consumer is outside the
+arranged selection is left where it is.
+
 The Console (Workspace > Console) shows one summary line per run, for example
 `[NodeArrange] 14 tools (comp), 14 links, horizontal, 1 trees, 0 crossings, 1 underlays, anchor Merge1`.
 
@@ -141,12 +156,15 @@ Fusion grid units (one tile = 1):
 | `componentGap` | 1.0 | extra space between separate trees |
 | `snap` | 0.25 | grid rounding, 0 disables |
 | `untangle` | 200 | swap tries to move links off tiles |
+| `routers` | false | route long links through PipeRouters |
+| `routerSpan` | 3 | columns a link must span to get routers |
 
 From a script you can also call it directly:
 
 ```lua
 local NA = require("NodeArrange")
 NA.run(comp, { direction = "vertical" })               -- arrange
+NA.run(comp, { routers = true, routerSpan = 2 })       -- with PipeRouters
 local pos, info = NA.run(comp, { apply = false })      -- dry run, moves nothing
 ```
 
@@ -154,7 +172,9 @@ local pos, info = NA.run(comp, { apply = false })      -- dry run, moves nothing
 
 - Fusion draws links as straight lines. Some links that skip several columns
   still pass behind a tile when no swap can fix it without adding crossings.
-  PipeRouters are not inserted, because that would change the comp.
+  Arrange Nodes with Routers fixes most of those by adding PipeRouters.
+- Routers are one chain per link. Several long links from the same source run
+  side by side; they are not merged into one shared bus.
 - Resizing an Underlay replaces it with a pasted copy of the same name,
   comments and colour. Scripts that hold a reference to the old Underlay
   object have to look it up again.

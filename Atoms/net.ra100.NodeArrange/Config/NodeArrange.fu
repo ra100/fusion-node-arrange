@@ -14,6 +14,17 @@
 	},
 	Action
 	{
+		ID = "NodeArrange_Routers",
+		Category = "Node Arrange",
+		Name = "Arrange Nodes with Routers",
+		Targets = {
+			Composition = {
+				Execute = _Lua [=[ target:RunScript("Scripts:Comp/Node Arrange/Arrange Nodes with Routers.lua") ]=],
+			},
+		},
+	},
+	Action
+	{
 		ID = "NodeArrange_Horizontal",
 		Category = "Node Arrange",
 		Name = "Arrange Nodes Horizontal",
@@ -44,6 +55,7 @@
 			Sub "Node Arrange"
 			{
 				"NodeArrange_Auto{}",
+				"NodeArrange_Routers{}",
 				"_",
 				"NodeArrange_Horizontal{}",
 				"NodeArrange_Vertical{}",

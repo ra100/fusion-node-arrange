@@ -58,6 +58,8 @@ def run_layout(lua, M, names, links, positions, opts=None):
     out = {n: (pos[idx[n]].x, pos[idx[n]].y) for n in names}
     info = dict(info)
     info["clusters"] = {k: (c.left, c.right, c.top, c.bottom) for k, c in info["clusters"].items()}
+    info["routes"] = {(names[r["from"] - 1], names[r["to"] - 1]): [(p.x, p.y) for p in r["points"].values()]
+                      for r in info["routes"].values()}
     return out, info
 
 
@@ -95,10 +97,11 @@ def check_clusters(names, pos, clusters, boxes):
     return errors
 
 
-def links_through_tiles(names, links, pos, half=0.45):
-    """Count (link, tile) pairs where the straight link line crosses another tile.
+def links_through_tiles(names, links, pos, half=0.45, routes=None):
+    """Count (link, tile) pairs where the drawn link crosses another tile.
 
-    Fusion draws links as straight lines; this is reported, not checked.
+    Fusion draws links as straight lines between tiles and routers; this is
+    reported, not checked.
     """
     def hits(p, q, c):
         t0, t1 = 0.0, 1.0
@@ -114,10 +117,29 @@ def links_through_tiles(names, links, pos, half=0.45):
                     return False
         return True
 
-    return sum(1 for a, b, _, _ in links for n in names if n not in (a, b) and hits(pos[a], pos[b], pos[n]))
+    def path(a, b):
+        return [pos[a]] + list((routes or {}).get((a, b), [])) + [pos[b]]
+
+    return sum(1 for a, b, _, _ in links for n in names if n not in (a, b)
+               and any(hits(p, q, pos[n]) for p, q in zip(path(a, b), path(a, b)[1:])))
 
 
-def render(path, names, links, pos, frames=None):
+def check_routes(names, pos, routes):
+    """Routers sit clear of tiles and of each other."""
+    errors = []
+    pts = [(k, p) for k, ps in routes.items() for p in ps]
+    for (a, b), p in pts:
+        for n in names:
+            if abs(p[0] - pos[n][0]) < 0.5 - 1e-6 and abs(p[1] - pos[n][1]) < 0.5 - 1e-6:
+                errors.append(f"router on {a}->{b} sits on {n}")
+    for i, (k1, p) in enumerate(pts):
+        for k2, q in pts[i + 1:]:
+            if abs(p[0] - q[0]) < 0.25 and abs(p[1] - q[1]) < 0.25:
+                errors.append(f"routers of {k1} and {k2} overlap")
+    return errors
+
+
+def render(path, names, links, pos, frames=None, routes=None):
     from PIL import Image, ImageDraw
 
     sx, sy = 110, 33
@@ -136,7 +158,10 @@ def render(path, names, links, pos, frames=None):
         d.rectangle([(l - ox) * sx, (t - oy) * sy, (r - ox) * sx, (b - oy) * sy], fill=(70, 66, 56), outline=(190, 180, 150))
     for a, b, slot, _ in links:
         col = (220, 200, 60) if slot == 0 else (90, 160, 255) if slot < 0 else (120, 220, 120)
-        d.line([c(a), c(b)], fill=col, width=2)
+        pts = [c(a)] + [((x - ox) * sx, (y - oy) * sy) for x, y in (routes or {}).get((a, b), [])] + [c(b)]
+        d.line(pts, fill=col, width=2)
+        for x, y in pts[1:-1]:
+            d.ellipse([x - 5, y - 5, x + 5, y + 5], fill=col)
     for n in names:
         x, y = c(n)
         d.rectangle([x - sx / 2 + 2, y - sy / 2 + 2, x + sx / 2 - 2, y + sy / 2 - 2], fill=(90, 90, 98), outline=(200, 200, 200))
@@ -350,11 +375,27 @@ def main():
                        info5["clusters"])
             except ImportError:
                 pass
+            # Routers: long links bend at PipeRouters placed clear of tiles.
+            posR, infoR = run_layout(lua, M, names, links, positions, {"direction": direction, "routers": True})
+            routes = infoR["routes"]
+            errs += check(names, links, posR, direction)
+            errs += check_routes(names, posR, routes)
+            posR2, infoR2 = run_layout(lua, M, names, links, posR, {"direction": direction, "routers": True})
+            movedR = [n for n in names if abs(posR[n][0] - posR2[n][0]) + abs(posR[n][1] - posR2[n][1]) > 1e-6]
+            if infoR["crossings"] == 0 and movedR:
+                errs.append(f"routers: re-run moved {len(movedR)} tools")
+            n_rt = sum(len(v) for v in routes.values())
+            through_r = links_through_tiles(names, links, posR, routes=routes)
+            route_note = f"routers={n_rt} crossings={infoR['drawn']} through-tiles={through_r}"
+            try:
+                render(os.path.join(out_dir, f"{name}_{direction}_routers.png"), names, links, posR, routes=routes)
+            except ImportError:
+                pass
             status = "OK " if not errs else "FAIL"
             failed += bool(errs)
             through = links_through_tiles(names, links, pos)
             print(f"{status} {name:11s} {direction:10s} nodes={len(names):3d} trees={info['components']} "
-                  f"crossings={info['drawn']} through-tiles={through} clusters={cl_note}")
+                  f"crossings={info['drawn']} through-tiles={through} clusters={cl_note} | {route_note}")
             for e in errs[:5]:
                 print("     ", e)
             try:

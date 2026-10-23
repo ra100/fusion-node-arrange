@@ -2,8 +2,8 @@ Atom {
 	Name = "Node Arrange",
 	Category = "Scripts/Flow",
 	Author = "ra100",
-	Version = 1.3,
-	Date = {2026, 10, 22},
+	Version = 1.4,
+	Date = {2026, 10, 23},
 	Description = [[<p>Blender-style "Arrange Nodes" for the Fusion node view. One click lays out the selected tools (or the whole comp) as a clean left-to-right or top-to-bottom flow.</p>
 
 <p>Layered (Sugiyama) layout, the same family of algorithm Blender's Node Arrange uses:</p>
@@ -16,13 +16,14 @@ Atom {
 	<li>Underlays and the tools inside them are arranged as one block, and the Underlay is resized to fit.</li>
 	<li>Groups and Macros count as one tile. Notes inside a moved Underlay move with it. One undo step.</li>
 	<li>Running it again on an arranged comp without crossings changes nothing.</li>
+	<li>Arrange Nodes with Routers: links that skip 3+ columns run level through PipeRouters (named NARouter) placed between tiles. Re-running replaces them; plain Arrange Nodes removes them.</li>
 </ul>
 
 <p>With 2+ tools selected only the selection is arranged, otherwise the whole comp. A tool selected inside an open Group counts as the Group, and selecting an Underlay selects its tools. The active tool keeps its position; without one, an arranged selection moves sideways until it covers no other tool. The arranged tools are left selected.</p>
 
 <p>Usage:</p>
 <ul>
-	<li>Resolve: Workspace &gt; Scripts &gt; Comp &gt; Node Arrange &gt; Arrange Nodes / Horizontal / Vertical.</li>
+	<li>Resolve: Workspace &gt; Scripts &gt; Comp &gt; Node Arrange &gt; Arrange Nodes / with Routers / Horizontal / Vertical.</li>
 	<li>Fusion Studio: the "Node Arrange" menu in the menu bar (after a restart), or Scripts &gt; Comp &gt; Node Arrange. The actions can be bound in View &gt; Customize Hotkeys.</li>
 </ul>
 
@@ -30,6 +31,7 @@ Atom {
 
 <p>Changes:</p>
 <ul>
+	<li>1.4: Arrange Nodes with Routers.</li>
 	<li>1.3: straighter main path, stable re-runs with Underlays, loops through Groups no longer stop the run, selection inside Groups and by Underlay, undo-safe on errors.</li>
 	<li>1.2: Underlays arranged as blocks, links moved off tiles, a selection keeps clear of the rest of the comp.</li>
 	<li>1.1: the active tool stays in place, arranged tools stay selected, loading through Fusion path maps and require.</li>
@@ -45,6 +47,7 @@ Atom {
 		"Scripts/Comp/Node Arrange/Arrange Nodes.lua",
 		"Scripts/Comp/Node Arrange/Arrange Nodes Horizontal.lua",
 		"Scripts/Comp/Node Arrange/Arrange Nodes Vertical.lua",
+		"Scripts/Comp/Node Arrange/Arrange Nodes with Routers.lua",
 		"Config/NodeArrange.fu",
 	},
 	Minimum = 9.0,

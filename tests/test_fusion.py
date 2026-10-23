@@ -178,6 +178,76 @@ def test_unicode(fu, expect):
         shutil.rmtree(folder, ignore_errors=True)
 
 
+def own_routers(comp, flow):
+    return {t.GetAttrs()["TOOLS_Name"]: tuple(flow.GetPosTable(t).values())[:2]
+            for t in comp.GetToolList(False, "PipeRouter").values()
+            if t.GetAttrs()["TOOLS_Name"].startswith("NARouter")}
+
+
+def source_of(tool, input_id):
+    """Name of the tool feeding an input, looking through NARouters."""
+    out = getattr(tool, input_id).GetConnectedOutput()
+    while out and out.GetTool().GetAttrs()["TOOLS_Name"].startswith("NARouter"):
+        out = out.GetTool().Input.GetConnectedOutput()
+    return out and out.GetTool().GetAttrs()["TOOLS_Name"]
+
+
+def test_routers(fu, expect):
+    """Long links get NARouters; re-runs keep them, a plain run removes them, undo brings them back."""
+    comp = fu.NewComp()
+    try:
+        flow = comp.CurrentFrame.FlowView
+        flow.Select()
+        t = {}
+        for name, rid, x, y in [("Plate", "Background", 0, 0), ("B1", "Blur", 2, 2), ("B2", "Blur", 4, 2),
+                                ("B3", "Blur", 6, 2), ("Mrg", "Merge", 8, 0), ("Mine", "PipeRouter", 3, 4)]:
+            t[name] = comp.AddTool(rid, x, y)
+            t[name].SetAttrs({"TOOLS_Name": name})
+            flow.Select()
+        t["B1"].ConnectInput("Input", t["Plate"])
+        t["B2"].ConnectInput("Input", t["B1"])
+        t["Mine"].ConnectInput("Input", t["B2"])
+        t["B3"].ConnectInput("Input", t["Mine"])
+        t["Mrg"].ConnectInput("Background", t["B3"])
+        t["Mrg"].ConnectInput("Foreground", t["Plate"])
+        wiring = {("Mrg", "Background"): "B3", ("Mrg", "Foreground"): "Plate", ("B3", "Input"): "Mine",
+                  ("Mine", "Input"): "B2", ("B2", "Input"): "B1", ("B1", "Input"): "Plate"}
+
+        def wired():
+            return all(source_of(comp.FindTool(a), i) == s for (a, i), s in wiring.items())
+
+        comp.SetActiveTool(None)
+        run_arrange(comp, '{ direction = "horizontal", routers = true }')
+        first = own_routers(comp, flow)
+        expect(len(first) > 0, f"long link got routers {sorted(first)}")
+        expect(wired(), "every input still fed by the same tool")
+        pos = positions(flow, t)
+        on_tile = [(r, n) for r, p in first.items() for n, q in pos.items()
+                   if abs(p[0] - q[0]) < 0.5 and abs(p[1] - q[1]) < 0.5]
+        expect(not on_tile, f"routers clear of tiles {on_tile}")
+
+        flow.Select()
+        comp.SetActiveTool(None)
+        run_arrange(comp, '{ direction = "horizontal", routers = true }')
+        expect(own_routers(comp, flow) == first, "re-run keeps the same routers")
+
+        flow.Select()
+        comp.SetActiveTool(None)
+        run_arrange(comp, '{ direction = "horizontal" }')
+        expect(not own_routers(comp, flow) and wired(), "plain arrange removes them and rewires directly")
+        expect(comp.FindTool("Mine") is not None, "a PipeRouter the user added is kept")
+
+        comp.Undo(1)
+        for _ in range(50):
+            if own_routers(comp, flow) == first:
+                break
+            time.sleep(0.1)
+        expect(own_routers(comp, flow) == first and wired(), "one undo brings the routers back")
+    finally:
+        comp.SetAttrs({"COMPB_Modified": False})
+        comp.Close()
+
+
 def main():
     fu = bmd.scriptapp("Fusion")
     if not fu:
@@ -256,6 +326,7 @@ def main():
         comp.Close()
     test_underlay(fu, expect)
     test_unicode(fu, expect)
+    test_routers(fu, expect)
     sys.exit(1 if errors else 0)
 
 

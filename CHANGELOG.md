@@ -3,6 +3,17 @@
 All notable changes to Node Arrange. Versions match `Version` in
 `net.ra100.NodeArrange.atom` and the git tags.
 
+## [1.4] - 2026-10-23
+
+### Added
+
+- Arrange Nodes with Routers: links that skip 3 or more columns run level
+  through PipeRouters named `NARouter…`, placed in free space between tiles.
+  Re-running replaces them, plain Arrange Nodes removes them, and one Undo
+  reverts both. Options `routers` and `routerSpan`.
+
+![1.3 Arrange Nodes vs 1.4 Arrange Nodes with Routers](docs/routers-transport.png)
+
 ## [1.3] - 2026-10-22
 
 ### Changed
@@ -96,6 +107,7 @@ All notable changes to Node Arrange. Versions match `Version` in
 - Menu entries in Resolve (Workspace > Scripts > Comp > Node Arrange) and in
   the Fusion Studio menu bar.
 
+[1.4]: https://github.com/ra100/fusion-node-arrange/compare/v1.3...v1.4
 [1.3]: https://github.com/ra100/fusion-node-arrange/compare/v1.2...v1.3
 [1.2]: https://github.com/ra100/fusion-node-arrange/compare/v1.1...v1.2
 [1.1]: https://github.com/ra100/fusion-node-arrange/compare/v1.0...v1.1
