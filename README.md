@@ -46,8 +46,12 @@ Node Arrange:
 Other behaviour:
 
 - **What gets arranged:** with 2 or more tools selected, only the selection.
-  With 0 or 1, the whole comp. A tool selected inside an open Group counts as
-  the Group. Selecting an Underlay selects the tools inside it.
+  With 0 or 1, the whole comp. Selecting an Underlay selects the tools inside it.
+- **Inside a Group:** when every selected tool is inside the same open Group,
+  the same rule applies to the Group's contents: one selected tool arranges the
+  whole Group around it, two or more arrange just those. Nothing outside the
+  Group moves. If the selection also has a tool outside the Group, the Group
+  counts as one tile.
 - **Anchor:** the active tool (red border, the last one you clicked) keeps its
   position and the layout is built around it. With exactly one tool selected,
   that tool is the anchor. Without an active tool, the layout is right-aligned
@@ -65,12 +69,17 @@ Other behaviour:
   inside a moved Underlay move with it; other empty Underlays are kept clear.
 - After a run, every arranged tool and Underlay is selected, so the block can
   be moved straight away.
-- Groups and Macros count as one tile. A link that loops back through a Group
-  is ignored for the layout, and the Console says so.
+- Outside the rule above, Groups and Macros count as one tile. A link that
+  loops back through a Group is ignored for the layout, and the Console says so.
 - Each run is one undo step.
 - **Arrange Nodes** picks horizontal or vertical: whichever axis more of the
   current links point forward along.
   **Arrange Nodes Horizontal** and **Arrange Nodes Vertical** force a direction.
+- **Arrange Nodes Options...** asks for the direction (Auto, Right, Left, Down,
+  Up), the spacing and routers, and remembers the choice. Links still point the
+  chosen way, so tools upstream of an anchor stay on its input side.
+- **Tiles showing a picture** get room for their full height. Fusion's per-tool
+  picture setting and Force All are read; for other Force modes, raise the spacing.
 
 ## Install
 
@@ -125,7 +134,7 @@ cp "$SRC/Config/NodeArrange.fu" "$DST/Config/"   # Fusion Studio menu bar entry
 
 - **Resolve:** Workspace > Scripts > Comp > Node Arrange.
 - **Fusion Studio:** the **Node Arrange** menu in the menu bar (appears after a
-  restart), or Scripts > Comp > Node Arrange. The three actions are listed
+  restart), or Scripts > Comp > Node Arrange. The actions are listed
   under "Node Arrange" in View > Customize Hotkeys, where you can bind keys.
 
 **Arrange Nodes with Routers** also routes links that skip 3 or more columns
@@ -144,6 +153,12 @@ arranged selection is left where it is.
 The Console (Workspace > Console) shows one summary line per run, for example
 `[NodeArrange] 14 tools (comp), 14 links, horizontal, 1 trees, 0 crossings, 1 underlays, anchor Merge1`.
 
+**Align Selection Horizontally** and **Align Selection Vertically** put the
+selected tools in one row or column, in their current order, evenly spaced. The
+active tool stays in place if it is selected; otherwise the first in order does.
+Tiles showing a picture get extra room in a column. If the line lands on an
+unselected tool, the Console says so. The selection rules for Groups also apply.
+
 ## Settings
 
 Spacing is in `M.defaults` at the top of `Modules/Lua/NodeArrange.lua`, in
@@ -154,6 +169,7 @@ Fusion grid units (one tile = 1):
 | `horizontal.layer` / `vertical.layer` | 1.5 / 2.0 | distance between columns (rows) |
 | `horizontal.node` / `vertical.node` | 1.5 / 1.5 | distance between tiles in a column |
 | `componentGap` | 1.0 | extra space between separate trees |
+| `spacing` | 1 | multiplies all of the distances above |
 | `snap` | 0.25 | grid rounding, 0 disables |
 | `untangle` | 200 | swap tries to move links off tiles |
 | `routers` | false | route long links through PipeRouters |
@@ -165,6 +181,8 @@ From a script you can also call it directly:
 local NA = require("NodeArrange")
 NA.run(comp, { direction = "vertical" })               -- arrange
 NA.run(comp, { routers = true, routerSpan = 2 })       -- with PipeRouters
+NA.run(comp, { direction = "left", spacing = 1.5 })    -- right, left, down, up
+NA.align(comp, { axis = "column", gap = 2 })           -- Align Selection
 local pos, info = NA.run(comp, { apply = false })      -- dry run, moves nothing
 ```
 
@@ -178,6 +196,11 @@ local pos, info = NA.run(comp, { apply = false })      -- dry run, moves nothing
 - Resizing an Underlay replaces it with a pasted copy of the same name,
   comments and colour. Scripts that hold a reference to the old Underlay
   object have to look it up again.
+- Inside a Group, routers are not added and Underlays and Notes stay where they
+  are, because Fusion's scripting API can only create tools at the top level.
+  The open Group's frame is not resized or panned to fit the result, so tools
+  can land outside it, most easily around an anchor near the frame's edge. Pan
+  the Group with its move icon or enlarge it to see them.
 - Nested Underlays: the outer one is kept as a block; inner ones are refitted
   around their tools afterwards and may overlap other tiles.
 
@@ -254,7 +277,9 @@ Bug reports and comps where the layout comes out wrong are welcome in the
 Inspired by [NodeAlign](https://github.com/prismanetcom/nodealign) by
 Stefano / Prismanet. Node Arrange takes its idea of treating Groups and Macros
 as single tiles, but is a separate implementation with a different algorithm.
-The real-comp test fixture
+Align Selection was suggested through `ar_AlignNodes` in
+[aturtur/fusion-scripts](https://github.com/aturtur/fusion-scripts); it is a
+separate implementation. The real-comp test fixture
 comes from NodeAlign under the MIT license; see
 [tests/fixtures/NOTICE.md](tests/fixtures/NOTICE.md).
 

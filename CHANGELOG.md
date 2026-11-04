@@ -3,6 +3,24 @@
 All notable changes to Node Arrange. Versions match `Version` in
 `net.ra100.NodeArrange.atom` and the git tags.
 
+## [1.5] - 2026-11-04
+
+### Added
+
+- Arrange Nodes Options dialog: flow right, left, down or up, spacing, routers.
+  Options `direction = "right" | "left" | "down" | "up"` and `spacing`.
+- Align Selection Horizontally and Vertically: one row or column, evenly spaced,
+  with `NA.align` for scripts.
+
+### Changed
+
+- Tiles showing a picture get room for their height, so they no longer overlap.
+
+### Fixed
+
+- Tools selected inside a Group are now arranged inside that Group. Before, the
+  selection counted as the Group's tile and the whole comp was arranged instead.
+
 ## [1.4] - 2026-10-23
 
 ### Added
@@ -107,6 +125,7 @@ All notable changes to Node Arrange. Versions match `Version` in
 - Menu entries in Resolve (Workspace > Scripts > Comp > Node Arrange) and in
   the Fusion Studio menu bar.
 
+[1.5]: https://github.com/ra100/fusion-node-arrange/compare/v1.4...v1.5
 [1.4]: https://github.com/ra100/fusion-node-arrange/compare/v1.3...v1.4
 [1.3]: https://github.com/ra100/fusion-node-arrange/compare/v1.2...v1.3
 [1.2]: https://github.com/ra100/fusion-node-arrange/compare/v1.1...v1.2

@@ -45,6 +45,39 @@
 			},
 		},
 	},
+	Action
+	{
+		ID = "NodeArrange_Options",
+		Category = "Node Arrange",
+		Name = "Arrange Nodes Options...",
+		Targets = {
+			Composition = {
+				Execute = _Lua [=[ target:RunScript("Scripts:Comp/Node Arrange/Arrange Nodes Options.lua") ]=],
+			},
+		},
+	},
+	Action
+	{
+		ID = "NodeArrange_AlignRow",
+		Category = "Node Arrange",
+		Name = "Align Selection Horizontally",
+		Targets = {
+			Composition = {
+				Execute = _Lua [=[ target:RunScript("Scripts:Comp/Node Arrange/Align Selection Horizontally.lua") ]=],
+			},
+		},
+	},
+	Action
+	{
+		ID = "NodeArrange_AlignColumn",
+		Category = "Node Arrange",
+		Name = "Align Selection Vertically",
+		Targets = {
+			Composition = {
+				Execute = _Lua [=[ target:RunScript("Scripts:Comp/Node Arrange/Align Selection Vertically.lua") ]=],
+			},
+		},
+	},
 
 	Menus
 	{
@@ -56,9 +89,13 @@
 			{
 				"NodeArrange_Auto{}",
 				"NodeArrange_Routers{}",
+				"NodeArrange_Options{}",
 				"_",
 				"NodeArrange_Horizontal{}",
 				"NodeArrange_Vertical{}",
+				"_",
+				"NodeArrange_AlignRow{}",
+				"NodeArrange_AlignColumn{}",
 			},
 		},
 	},
