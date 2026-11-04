@@ -21,15 +21,22 @@ MODULE_DIR = os.path.join(HERE, "..", "Atoms", "net.ra100.NodeArrange", "Modules
 
 
 def run_arrange(comp, opts_lua, module_dir=MODULE_DIR, fn="run"):
-    """Run M.run (or M.align) inside Fusion with the checkout's module; wait for it to finish."""
+    """Run M.run (or M.align) inside Fusion with the checkout's module; wait for it to finish.
+
+    Returns what it printed."""
     tmp = tempfile.mkdtemp()
     done = os.path.join(tmp, "done")
+    log = os.path.join(tmp, "log")
     script = os.path.join(tmp, "drive.lua")
     with open(script, "w", encoding="utf-8") as f:
         f.write(
             f'package.path = [[{module_dir}/?.lua;]] .. package.path\n'
             'package.loaded.NodeArrange = nil\n'
+            f'local log = io.open([[{log}]], "w")\n'
+            'local real_print = _G.print\n'
+            '_G.print = function(s) log:write(tostring(s), "\\n") real_print(s) end\n'
             f'local ok, err = pcall(function() require("NodeArrange").{fn}(comp, {opts_lua}) end)\n'
+            '_G.print = real_print log:close()\n'
             f'local f = io.open([[{done}]], "w") f:write(ok and "ok" or tostring(err)) f:close()\n'
         )
     comp.RunScript(script)
@@ -39,7 +46,8 @@ def run_arrange(comp, opts_lua, module_dir=MODULE_DIR, fn="run"):
                 result = f.read()
             if result != "ok":
                 raise RuntimeError(result)
-            return
+            with open(log, encoding="utf-8") as f:
+                return f.read()
         time.sleep(0.1)
     raise TimeoutError("NodeArrange did not finish")
 
@@ -350,6 +358,41 @@ OPTIONS_COMP = """{ Tools = ordered() {
 } }"""
 
 
+def test_frame_warning(fu, expect):
+    """The Console says when arranged tools land outside the Group's open frame."""
+    comp = fu.NewComp()
+    try:
+        comp.Paste(bmd.readstring(GROUP_COMP.replace("Size = { 500, 200 }", "Size = { 800, 330 }")))
+        flow = comp.CurrentFrame.FlowView
+        t = {n: comp.FindTool(n) for n in ["G1", "G2", "G3", "G4", "Far"]}
+
+        def arrange_around(name, x, y, offset=None):
+            flow.SetPos(t[name], x, y)
+            flow.Select()
+            flow.Select(t[name], True)
+            comp.SetActiveTool(t[name])
+            return run_arrange(comp, '{ direction = "right" }')
+
+        # G1 feeds everything, so the others land to its right.
+        fits = arrange_around("G1", -3, 2)
+        expect("[NodeArrange]" in fits and "outside the frame" not in fits, f"no warning when all tools fit {fits}")
+        expect("outside the frame of Grp" in arrange_around("G1", 2.5, 2), "warning when tools leave the frame")
+        flow.Select()
+        flow.Select(t["G1"], True)
+        flow.Select(t["G2"], True)
+        comp.SetActiveTool(t["G1"])
+        flow.SetPos(t["G1"], 2.5, 2)
+        expect("outside the frame of Grp" in run_arrange(comp, '{ axis = "row" }', fn="align"),
+               "Align Selection warns too")
+        flow.Select()
+        flow.Select(t["Far"], True)
+        comp.SetActiveTool(None)
+        expect("outside the frame" not in run_arrange(comp, '{ direction = "right" }'), "top level run does not warn")
+    finally:
+        comp.SetAttrs({"COMPB_Modified": False})
+        comp.Close()
+
+
 def test_options(fu, expect):
     """Flow direction, spacing and room for picture tiles."""
     comp = fu.NewComp()
@@ -531,6 +574,7 @@ def main():
     test_unicode(fu, expect)
     test_routers(fu, expect)
     test_group(fu, expect)
+    test_frame_warning(fu, expect)
     test_options(fu, expect)
     test_align(fu, expect)
     sys.exit(1 if errors else 0)

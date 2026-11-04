@@ -200,7 +200,8 @@ local pos, info = NA.run(comp, { apply = false })      -- dry run, moves nothing
   are, because Fusion's scripting API can only create tools at the top level.
   The open Group's frame is not resized or panned to fit the result, so tools
   can land outside it, most easily around an anchor near the frame's edge. Pan
-  the Group with its move icon or enlarge it to see them.
+  the Group with its move icon or enlarge it to see them. The Console says how
+  many are outside.
 - Nested Underlays: the outer one is kept as a block; inner ones are refitted
   around their tools afterwards and may overlap other tiles.
 

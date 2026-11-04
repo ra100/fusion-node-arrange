@@ -1138,6 +1138,8 @@ local function isOwnRouter(t)
   return a.TOOLS_RegID == "PipeRouter" and (a.TOOLS_Name or ""):sub(1, #ROUTER_PREFIX) == ROUTER_PREFIX
 end
 
+local PX_X, PX_Y = 110, 33                  -- ViewInfo pixels per flow unit
+
 -- A tile showing a picture is taller and grows downward from its position. This
 -- is the height the layout reserves, in tiles: measured 1.94 flow units in
 -- Fusion Studio 21, and it keeps clear of a plain tile at spacing 0.75.
@@ -1149,6 +1151,38 @@ local function showsPicture(comp, t, forceAll)
   local tool = st and st.Tools and st.Tools[t.Name]
   local flags = tool and tool.ViewInfo and tool.ViewInfo.Flags
   return flags ~= nil and flags.ShowPic == true
+end
+
+-- Returns a function telling whether a tile at inner position (x, y) is fully
+-- visible in the Group's open frame, or nil when the frame is closed. A script
+-- cannot resize or pan the frame. Constants measured in Fusion Studio 21 (ViewInfo
+-- pixels): x is centred on the frame, y runs from below the header.
+local function frameView(comp, group)
+  local st = comp:CopySettings(group)
+  local g = st and st.Tools and st.Tools[group.Name]
+  local v = g and g.ViewInfo
+  if not (v and v.Size and v.Flags and v.Flags.Expanded) then return nil end
+  local k = v.Scale or 1
+  local ox, oy = v.Offset and v.Offset[1] or 0, v.Offset and v.Offset[2] or 0
+  local w, h = v.Size[1], v.Size[2]
+  return function(x, y)
+    local px = w / 2 + k * (55 + PX_X * x + ox)
+    local py = 24 + k * (15 + PX_Y * y + oy)
+    return px - k * 43 >= 0 and px + k * 43 <= w and py - k * 8 >= 24 and py + k * 8 <= h
+  end
+end
+
+local function reportOutsideFrame(comp, group, positions)
+  local visible = frameView(comp, group)
+  if not visible then return end
+  local outside = 0
+  for _, p in ipairs(positions) do
+    if not visible(p.x, p.y) then outside = outside + 1 end
+  end
+  if outside > 0 then
+    print(string.format("[NodeArrange] %d tools are outside the frame of %s: pan it with its move icon or enlarge it",
+      outside, group.Name))
+  end
 end
 
 -- Follows an output back through own routers to the output that feeds them.
@@ -1276,7 +1310,6 @@ end
 
 -- An Underlay's size exists only in its saved settings (ViewInfo.Size, in pixels).
 -- SetPos puts its top-left corner where a tile at the same position has its own.
-local PX_X, PX_Y = 110, 33                  -- ViewInfo pixels per flow unit
 local TILE_HW, TILE_HH = 43 / PX_X, 8 / PX_Y  -- half a tile, in flow units
 
 local function underlayRect(comp, flow, u)
@@ -1588,6 +1621,7 @@ function M.run(comp, opts)
     print(string.format("[NodeArrange] %s: a link leaves it and comes back, so its tools were arranged on their own",
       clusterFrame[k] and clusterFrame[k].tool.Name or "underlay"))
   end
+  if group then reportOutsideFrame(comp, group, pos) end
   if info.cycles > 0 then
     print(string.format("[NodeArrange] %d links close a loop through a Group and were ignored for the layout", info.cycles))
   end
@@ -1692,6 +1726,11 @@ function M.align(comp, opts)
   print(string.format("[NodeArrange] aligned %d tools in a %s, %s kept in place", #tools,
     row and "row" or "column", at.tool.Name))
   if covered > 0 then print(string.format("[NodeArrange] %d tiles overlap unselected tools", covered)) end
+  if group then
+    local placed = {}
+    for i, it in ipairs(tools) do placed[i] = { x = it.nx, y = it.ny } end
+    reportOutsideFrame(comp, group, placed)
+  end
 end
 
 return M
