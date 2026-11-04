@@ -20,8 +20,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 MODULE_DIR = os.path.join(HERE, "..", "Atoms", "net.ra100.NodeArrange", "Modules", "Lua")
 
 
-def run_arrange(comp, opts_lua, module_dir=MODULE_DIR):
-    """Run M.run inside Fusion with the checkout's module; wait for it to finish."""
+def run_arrange(comp, opts_lua, module_dir=MODULE_DIR, fn="run"):
+    """Run M.run (or M.align) inside Fusion with the checkout's module; wait for it to finish."""
     tmp = tempfile.mkdtemp()
     done = os.path.join(tmp, "done")
     script = os.path.join(tmp, "drive.lua")
@@ -29,7 +29,7 @@ def run_arrange(comp, opts_lua, module_dir=MODULE_DIR):
         f.write(
             f'package.path = [[{module_dir}/?.lua;]] .. package.path\n'
             'package.loaded.NodeArrange = nil\n'
-            f'local ok, err = pcall(function() require("NodeArrange").run(comp, {opts_lua}) end)\n'
+            f'local ok, err = pcall(function() require("NodeArrange").{fn}(comp, {opts_lua}) end)\n'
             f'local f = io.open([[{done}]], "w") f:write(ok and "ok" or tostring(err)) f:close()\n'
         )
     comp.RunScript(script)
@@ -139,6 +139,7 @@ def test_underlay(fu, expect):
         expect(ul3 is not None and underlay_rect(comp, flow, ul3) == before, "one undo restores the underlay")
 
         # Selecting only the Underlay arranges the tools inside it.
+        time.sleep(1)  # Undo finishes after the Underlay is back; a selection made before that is lost
         start = positions(flow, tools)
         flow.Select()
         flow.Select(ul3, True)
@@ -248,6 +249,208 @@ def test_routers(fu, expect):
         comp.Close()
 
 
+GROUP_COMP = """{ Tools = ordered() {
+  Outside = Background { ViewInfo = OperatorInfo { Pos = { 0, 0 } } },
+  Far = Blur { ViewInfo = OperatorInfo { Pos = { 880, 330 } } },
+  Grp = GroupOperator {
+    Inputs = ordered() { Input1 = InstanceInput { SourceOp = "G1", Source = "Input" } },
+    Outputs = { Output1 = InstanceOutput { SourceOp = "G4", Source = "Output" } },
+    ViewInfo = GroupInfo { Pos = { 220, 66 }, Flags = { Expanded = true }, Size = { 500, 200 } },
+    Tools = ordered() {
+      G1 = Blur { Inputs = { Input = Input { SourceOp = "Outside", Source = "Output" } },
+                  ViewInfo = OperatorInfo { Pos = { 330, 99 } } },
+      G2 = Blur { Inputs = { Input = Input { SourceOp = "G1", Source = "Output" } },
+                  ViewInfo = OperatorInfo { Pos = { 0, 165 } } },
+      G3 = Blur { Inputs = { Input = Input { SourceOp = "G1", Source = "Output" } },
+                  ViewInfo = OperatorInfo { Pos = { 110, 0 } } },
+      G4 = Merge { Inputs = { Background = Input { SourceOp = "G2", Source = "Output" },
+                              Foreground = Input { SourceOp = "G3", Source = "Output" } },
+                   ViewInfo = OperatorInfo { Pos = { 55, 66 } } },
+      GU = Underlay { ViewInfo = UnderlayInfo { Pos = { 0, 330 }, Size = { 200, 100 } } },
+    },
+  },
+} }"""
+
+
+def test_group(fu, expect):
+    """A selection inside a Group arranges at the Group's level and touches nothing outside."""
+    comp = fu.NewComp()
+    try:
+        comp.Paste(bmd.readstring(GROUP_COMP))
+        flow = comp.CurrentFrame.FlowView
+        names = ["Outside", "Far", "Grp", "G1", "G2", "G3", "G4", "GU"]
+        t = {n: comp.FindTool(n) for n in names}
+        inner = ["G1", "G2", "G3", "G4"]
+        outer = ["Outside", "Far", "Grp"]
+        wiring = {n: source_of(t[n], "Input") for n in ["G1", "G2", "G3"]}
+        start = positions(flow, t)
+
+        # One selected child: the whole Group, that child stays put.
+        flow.Select()
+        flow.Select(t["G2"], True)
+        comp.SetActiveTool(t["G2"])
+        run_arrange(comp, '{ direction = "horizontal", routers = true }')
+        after = positions(flow, t)
+        expect(all(after[n] == start[n] for n in outer), "Group run leaves the outside alone")
+        expect(abs(after["G2"][0] - start["G2"][0]) < 0.01 and abs(after["G2"][1] - start["G2"][1]) < 0.01,
+               f"selected child is the anchor {start['G2']} -> {after['G2']}")
+        expect(after["G1"][0] < after["G2"][0] < after["G4"][0], "children flow along their links")
+        expect(after["G1"] != start["G1"] and after["GU"] == start["GU"],
+               "children moved, Underlay in the Group stayed")
+        expect(all(t[n].ParentTool.Name == "Grp" for n in inner), "children stay in the Group")
+        expect({n: source_of(t[n], "Input") for n in wiring} == wiring, "wiring kept, no routers added")
+        expect(comp.FindTool("NARouter1") is None, "no router created at the top level")
+        undo(comp, flow, t)
+        expect(positions(flow, t) == start, "one undo restores a Group run")
+
+        # Two children selected: only those move.
+        flow.Select()
+        for n in ["G1", "G3"]:
+            flow.Select(t[n], True)
+        comp.SetActiveTool(None)
+        run_arrange(comp, '{ direction = "horizontal" }')
+        after = positions(flow, t)
+        expect(all(after[n] == start[n] for n in names if n not in ["G1", "G3"]),
+               "only the selected children moved")
+        undo(comp, flow, t)
+
+        # A child and an outside tool: both count at the top level, so the Group is one tile.
+        flow.Select()
+        for n in ["G1", "Far"]:
+            flow.Select(t[n], True)
+        comp.SetActiveTool(None)
+        run_arrange(comp, '{ direction = "horizontal" }')
+        after = positions(flow, t)
+        expect(all(after[n] == start[n] for n in inner), "mixed selection leaves the children")
+        undo(comp, flow, t)
+
+        # Nothing selected: the top level, as before.
+        flow.Select()
+        comp.SetActiveTool(None)
+        run_arrange(comp, '{ direction = "horizontal" }')
+        after = positions(flow, t)
+        expect(after["Outside"][0] < after["Grp"][0], "no selection arranges the top level")
+        expect(all(after[n] == start[n] for n in inner), "no selection leaves the children")
+    finally:
+        comp.SetAttrs({"COMPB_Modified": False})
+        comp.Close()
+
+
+OPTIONS_COMP = """{ Tools = ordered() {
+  Src = Background { ViewInfo = OperatorInfo { Pos = { 0, 0 } } },
+  PicA = Blur { Inputs = { Input = Input { SourceOp = "Src", Source = "Output" } },
+                ViewInfo = OperatorInfo { Pos = { 110, 33 }, Flags = { ShowPic = true } } },
+  PicB = Blur { Inputs = { Input = Input { SourceOp = "Src", Source = "Output" } },
+                ViewInfo = OperatorInfo { Pos = { 220, 99 }, Flags = { ShowPic = true } } },
+  Plain = Blur { Inputs = { Input = Input { SourceOp = "Src", Source = "Output" } },
+                 ViewInfo = OperatorInfo { Pos = { 330, 132 } } },
+  Mrg = Merge { Inputs = { Background = Input { SourceOp = "PicA", Source = "Output" },
+                           Foreground = Input { SourceOp = "PicB", Source = "Output" } },
+                ViewInfo = OperatorInfo { Pos = { 440, 66 } } },
+} }"""
+
+
+def test_options(fu, expect):
+    """Flow direction, spacing and room for picture tiles."""
+    comp = fu.NewComp()
+    try:
+        comp.Paste(bmd.readstring(OPTIONS_COMP))
+        flow = comp.CurrentFrame.FlowView
+        t = {n: comp.FindTool(n) for n in ["Src", "PicA", "PicB", "Plain", "Mrg"]}
+        links = [("Src", "PicA"), ("Src", "PicB"), ("Src", "Plain"), ("PicA", "Mrg"), ("PicB", "Mrg")]
+        start = positions(flow, t)
+        flow.Select()
+        comp.SetActiveTool(None)
+        for sense, axis, sign in (("right", 0, 1), ("left", 0, -1), ("down", 1, 1), ("up", 1, -1)):
+            run_arrange(comp, f'{{ direction = "{sense}" }}')
+            after = positions(flow, t)
+            expect(all((after[b][axis] - after[a][axis]) * sign > 0 for a, b in links), f"{sense}: links point {sense}")
+            undo(comp, flow, t)
+            expect(positions(flow, t) == start, f"{sense}: one undo restores")
+            flow.Select()
+            comp.SetActiveTool(None)
+
+        run_arrange(comp, '{ direction = "right" }')
+        after = positions(flow, t)
+        expect(abs(after["PicA"][1] - after["PicB"][1]) >= 1.94, f"picture tiles clear in a column {after}")
+        expect(abs(after["PicA"][1] - after["Plain"][1]) >= 1.94 or after["PicA"][1] > after["Plain"][1],
+               "plain tile clears the picture above it")
+        undo(comp, flow, t)
+        flow.Select()
+        comp.SetActiveTool(None)
+        run_arrange(comp, '{ direction = "down" }')
+        after = positions(flow, t)
+        expect(after["Mrg"][1] - after["PicA"][1] >= 1.94 + 0.5, f"a picture row pushes the next row down {after}")
+        undo(comp, flow, t)
+        flow.Select()
+        comp.SetActiveTool(None)
+        run_arrange(comp, '{ direction = "right" }')
+        one = positions(flow, t)
+        undo(comp, flow, t)
+        flow.Select()
+        comp.SetActiveTool(None)
+        run_arrange(comp, '{ direction = "right", spacing = 2 }')
+        two = positions(flow, t)
+        expect(abs(two["Mrg"][0] - two["Src"][0]) > abs(one["Mrg"][0] - one["Src"][0]) * 1.9, "spacing 2 widens the columns")
+    finally:
+        comp.SetAttrs({"COMPB_Modified": False})
+        comp.Close()
+
+
+def test_align(fu, expect):
+    """Align Selection: one line, even gaps, anchor and order kept, nothing else moves, one undo."""
+    comp = fu.NewComp()
+    try:
+        comp.Paste(bmd.readstring(OPTIONS_COMP))
+        comp.Paste(bmd.readstring(GROUP_COMP))
+        flow = comp.CurrentFrame.FlowView
+        names = ["Src", "PicA", "PicB", "Plain", "Mrg", "G1", "G2", "G3", "G4", "Far"]
+        t = {n: comp.FindTool(n) for n in names}
+        start = positions(flow, t)
+        close = lambda a, b: abs(a - b) < 0.01  # noqa: E731
+
+        def select(sel, active=None):
+            flow.Select()
+            for n in sel:
+                flow.Select(t[n], True)
+            comp.SetActiveTool(t[active] if active else None)
+
+        sel = ["Src", "PicA", "PicB", "Plain"]
+        select(sel, "PicB")
+        run_arrange(comp, '{ axis = "row" }', fn="align")
+        a = positions(flow, t)
+        expect(close(a["PicB"][0], start["PicB"][0]) and close(a["PicB"][1], start["PicB"][1]), "row: active tool stays")
+        expect(all(close(a[n][1], start["PicB"][1]) for n in sel), "row: one line")
+        expect(all(close(a[q][0] - a[p][0], 1.5) for p, q in zip(sel, sel[1:])), f"row: order and even gaps {a}")
+        expect(all(a[n] == start[n] for n in names if n not in sel), "row: nothing else moved")
+        undo(comp, flow, t)
+        expect(positions(flow, t) == start, "row: one undo restores")
+
+        select(sel)
+        run_arrange(comp, '{ axis = "column", gap = 2 }', fn="align")
+        a = positions(flow, t)
+        expect(close(a["Src"][1], start["Src"][1]), "column: first tool stays without an active tool")
+        expect(all(close(a[n][0], start["Src"][0]) for n in sel), "column: one line")
+        expect(all(a[q][1] - a[p][1] >= 2 - 0.01 for p, q in zip(sel, sel[1:])), f"column: order and gap {a}")
+        expect(a["PicB"][1] - a["PicA"][1] >= 1.94 + 1, "column: picture tiles get more room")
+        undo(comp, flow, t)
+
+        select(["G1", "G3"], "G3")
+        run_arrange(comp, '{ axis = "row" }', fn="align")
+        a = positions(flow, t)
+        expect(close(a["G1"][1], a["G3"][1]) and close(a["G3"][0], start["G3"][0]), "Group: children aligned")
+        expect(t["G1"].ParentTool.Name == "Grp" and all(a[n] == start[n] for n in names if n not in ("G1", "G3")),
+               "Group: nothing else moved")
+        undo(comp, flow, t)
+
+        select(["Src"])
+        run_arrange(comp, '{ axis = "row" }', fn="align")
+        expect(positions(flow, t) == start, "one tool: nothing moves")
+    finally:
+        comp.SetAttrs({"COMPB_Modified": False})
+        comp.Close()
+
+
 def main():
     fu = bmd.scriptapp("Fusion")
     if not fu:
@@ -327,6 +530,9 @@ def main():
     test_underlay(fu, expect)
     test_unicode(fu, expect)
     test_routers(fu, expect)
+    test_group(fu, expect)
+    test_options(fu, expect)
+    test_align(fu, expect)
     sys.exit(1 if errors else 0)
 
 

@@ -49,6 +49,8 @@ def run_layout(lua, M, names, links, positions, opts=None):
                 t["pad"] = lua.table_from(pad)
             return lua.table_from(t)
         opts["clusters"] = lua.table_from([cluster(c) for c in opts["clusters"]])
+    if "tiles" in opts:
+        opts["tiles"] = lua.table_from({idx[n]: lua.table_from(dict(zip("wh", z))) for n, z in opts["tiles"].items()})
     for k in ("horizontal", "vertical"):
         if isinstance(opts.get(k), dict):
             opts[k] = lua.table_from(opts[k])
@@ -306,6 +308,63 @@ def edge_cases(lua, M):
     return len(errs)
 
 
+def option_cases(lua, M):
+    """Mirrored directions, spacing and large tiles on the keying comp; returns the number of failures."""
+    errs = []
+    names, links = comp_case()
+    rnd = random.Random("options")
+    positions = {n: (rnd.uniform(0, 20), rnd.uniform(0, 10)) for n in names}
+
+    def verify(name, ok, detail=""):
+        print(("OK   " if ok else "FAIL ") + name + (f": {detail}" if not ok else ""))
+        if not ok:
+            errs.append(name)
+
+    def overlaps(pos, half):
+        return [(a, b) for i, a in enumerate(names) for b in names[i + 1:]
+                if abs(pos[a][0] - pos[b][0]) < half(a, 0) + half(b, 0) - 1e-6
+                and abs(pos[a][1] - pos[b][1]) < half(a, 1) + half(b, 1) - 1e-6]
+
+    for sense, base, axis in (("left", "horizontal", 0), ("up", "vertical", 1)):
+        mirrored_in = {n: ((-x, y) if axis == 0 else (x, -y)) for n, (x, y) in positions.items()}
+        fwd, _ = run_layout(lua, M, names, links, mirrored_in, {"direction": base})
+        pos, info = run_layout(lua, M, names, links, positions, {"direction": sense})
+        verify(f"{sense}: links run the other way", all(pos[b][axis] < pos[a][axis] for a, b, _, _ in links))
+        verify(f"{sense}: mirrors {base}",
+               all(abs(pos[n][axis] + fwd[n][axis]) < 1e-6 and abs(pos[n][1 - axis] - fwd[n][1 - axis]) < 1e-6
+                   for n in names))
+        verify(f"{sense}: info names the direction", info["direction"] == sense, info["direction"])
+        pin = names[3]
+        anch, _ = run_layout(lua, M, names, links, positions, {"direction": sense, "anchor": 4})
+        verify(f"{sense}: anchor stays", anch[pin] == positions[pin], (anch[pin], positions[pin]))
+        again, _ = run_layout(lua, M, names, links, pos, {"direction": sense})
+        verify(f"{sense}: re-run is stable",
+               all(abs(again[n][0] - pos[n][0]) + abs(again[n][1] - pos[n][1]) < 1e-6 for n in names))
+        clusters = [(names[:3], {"left": 1, "right": 1, "top": 0.5, "bottom": 2})]
+        cpos, cinfo = run_layout(lua, M, names, links, positions, {"direction": sense, "clusters": clusters})
+        box = cinfo["clusters"].get(1)
+        verify(f"{sense}: frame stays around its tools", box is not None and all(
+            box[0] <= cpos[n][0] <= box[1] and box[2] <= cpos[n][1] <= box[3] for n in names[:3]), box)
+        rpos, rinfo = run_layout(lua, M, names, links, positions, {"direction": sense, "routers": True})
+        verify(f"{sense}: routers follow", not check_routes(names, rpos, rinfo["routes"]))
+
+    base, _ = run_layout(lua, M, names, links, positions, {"direction": "horizontal"})
+    wide, _ = run_layout(lua, M, names, links, positions, {"direction": "horizontal", "spacing": 2})
+    span = lambda p, a: max(v[a] for v in p.values()) - min(v[a] for v in p.values())  # noqa: E731
+    verify("spacing 2 spreads the layout", span(wide, 0) > 1.9 * span(base, 0) and span(wide, 1) > 1.5 * span(base, 1),
+           (span(base, 0), span(wide, 0)))
+
+    tall = {n: (1, 2.7) for n in names[::2]}
+    half = lambda n, a: (tall[n][a] if n in tall else 1) / 2  # noqa: E731
+    for direction in ("horizontal", "vertical", "left", "up"):
+        pos, _ = run_layout(lua, M, names, links, positions, {"direction": direction, "tiles": tall})
+        verify(f"tall tiles do not overlap, {direction}", not overlaps(pos, half), overlaps(pos, half)[:3])
+    pos, _ = run_layout(lua, M, names, links, positions, {"direction": "horizontal", "tiles": tall,
+                                                         "clusters": [names[:3]]})
+    verify("tall tiles do not overlap inside and outside a frame", not overlaps(pos, half), overlaps(pos, half)[:3])
+    return len(errs)
+
+
 def main():
     out_dir = sys.argv[1] if len(sys.argv) > 1 else os.path.join(tempfile.gettempdir(), "nodearrange_out")
     os.makedirs(out_dir, exist_ok=True)
@@ -403,6 +462,7 @@ def main():
             except ImportError:
                 pass
     failed += edge_cases(lua, M)
+    failed += option_cases(lua, M)
     sys.exit(1 if failed else 0)
 
 

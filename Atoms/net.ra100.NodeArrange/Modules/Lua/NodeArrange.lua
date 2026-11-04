@@ -10,10 +10,12 @@ M.run(comp, opts) is the Fusion glue.
 ]]
 
 local M = {}
-M.VERSION = "1.4"
+M.VERSION = "1.5"
 
 M.defaults = {
   -- "auto" picks horizontal or vertical from the comp's current links.
+  -- "right" and "down" are the same as "horizontal" and "vertical";
+  -- "left" and "up" flow the other way.
   direction = "auto",
   -- Spacing in Fusion grid units (one tile is 1 x 1).
   --   layer: distance between columns (rows in vertical mode)
@@ -22,6 +24,7 @@ M.defaults = {
   horizontal = { layer = 1.5, node = 1.5, dummy = 0.5 },
   vertical   = { layer = 2.0, node = 1.5, dummy = 0.5 },
   componentGap = 1.0,  -- extra space between independent node trees
+  spacing = 1,         -- multiplies layer, node, dummy and componentGap
   snap = 0.25,         -- round positions to this step; 0 disables
   sweeps = 24,         -- crossing-reduction sweeps per starting order
   straighten = 16,     -- coordinate-assignment passes
@@ -695,7 +698,8 @@ end
 
 -- Lay out every connected component and stack them across the flow.
 local function arrange(nodes, edges, o, dir)
-  local sp = o[dir]
+  local k = o.spacing or 1
+  local sp = { layer = o[dir].layer * k, node = o[dir].node * k, dummy = o[dir].dummy * k }
   local sizes = o.sizes or {}
   local function rs(n)
     if dir == "horizontal" then return n.x, n.y end
@@ -774,7 +778,7 @@ local function arrange(nodes, edges, o, dir)
       for k, p in ipairs(rt.pts) do pts[k] = place(p) end
       routes[#routes + 1] = { from = rt.from, to = rt.to, points = pts }
     end
-    cursor = cursor + (c.smax - c.smin) + sp.node + o.componentGap
+    cursor = cursor + (c.smax - c.smin) + sp.node + o.componentGap * k
     crossings = crossings + c.crossings
   end
   return out, { direction = dir, components = #comps, crossings = crossings, routes = routes }
@@ -847,6 +851,8 @@ local function arrangeClustered(nodes, edges, o, dir)
     end
     local so = copyDefaults(o)
     so.direction, so.clusters, so.anchor, so.obstacles, so.sizes = dir, nil, nil, nil, nil
+    so.tiles = {}
+    for j, i in ipairs(b.members) do so.tiles[j] = o.tiles and o.tiles[i] end
     local rel, err = M.layout(sub, subEdges, so)
     if not rel then return nil, err end
     b.routes = err.routes
@@ -864,6 +870,10 @@ local function arrangeClustered(nodes, edges, o, dir)
                       y = (oy0 - (p.top or 0.5) + oy1 + (p.bottom or 0.5)) / 2 }
     local w, h = b.box.right - b.box.left, b.box.bottom - b.box.top
     sizes[b.key] = (dir == "horizontal") and { r = w, s = h } or { r = h, s = w }
+  end
+
+  for i, z in pairs(o.sizes or {}) do
+    if not owner[i] then sizes[i] = z end
   end
 
   local cedges = {}
@@ -905,6 +915,57 @@ local function arrangeClustered(nodes, edges, o, dir)
   return out, info
 end
 
+local FORWARD = { right = "horizontal", down = "vertical" }
+local MIRRORED = { left = "x", up = "y" }
+
+-- Layout flowing the other way: mirror the input, lay out forward, mirror back.
+local function mirrored(nodes, edges, o)
+  local axis = MIRRORED[o.direction]
+  local function flip(p)
+    local q = {}
+    for k, v in pairs(p) do q[k] = v end
+    q[axis] = -p[axis]
+    return q
+  end
+  local a, z = "left", "right"
+  if axis == "y" then a, z = "top", "bottom" end
+  local function swapped(box)
+    local q = {}
+    for k, v in pairs(box) do q[k] = v end
+    q[a], q[z] = box[z], box[a]
+    return q
+  end
+
+  local so = copyDefaults(o)
+  so.direction = (axis == "x") and "horizontal" or "vertical"
+  local mnodes = {}
+  for i, n in pairs(nodes) do mnodes[i] = flip(n) end
+  if o.obstacles then
+    so.obstacles = {}
+    for k, b in ipairs(o.obstacles) do so.obstacles[k] = flip(b) end
+  end
+  if o.clusters then
+    so.clusters = {}
+    for k, c in ipairs(o.clusters) do
+      so.clusters[k] = { members = c.members, pad = swapped(c.pad or {}) }
+    end
+  end
+
+  local out, info = M.layout(mnodes, edges, so)
+  if not out then return nil, info end
+  for _, p in pairs(out) do p[axis] = -p[axis] end
+  for _, rt in ipairs(info.routes) do
+    for _, p in ipairs(rt.points) do p[axis] = -p[axis] end
+  end
+  for k, c in pairs(info.clusters) do
+    local m = swapped(c)
+    m[a], m[z] = -m[a], -m[z]
+    info.clusters[k] = m
+  end
+  info.direction = o.direction
+  return out, info
+end
+
 --[[
 Pure layout.
   nodes[i] = { x = , y = }  current flow positions
@@ -915,6 +976,7 @@ Pure layout.
     (w, h default to one tile).
   opts.clusters = { {members = {i, ...}, pad = {left=, right=, top=, bottom=}}, ... }
     nodes kept together inside a frame; info.clusters[k] is the frame's new box.
+  opts.tiles[i] = { w = , h = } is the size of a tile larger than 1 x 1.
   opts.routers = true routes links spanning opts.routerSpan columns or more;
     info.routes[k] = { from = i, to = j, points = { {x=, y=}, ... } } are the
     PipeRouter positions on the link from i to j, in order.
@@ -922,6 +984,8 @@ Returns positions[i] = { x = , y = }, info  or nil, err.
 ]]
 function M.layout(nodes, edges, opts)
   local o = copyDefaults(opts)
+  if MIRRORED[o.direction] then return mirrored(nodes, edges, o) end
+  o.direction = FORWARD[o.direction] or o.direction
   local broken
   edges, broken = dropBackEdges(nodes, mergeEdges(nodes, edges))
 
@@ -934,6 +998,13 @@ function M.layout(nodes, edges, opts)
       if nodes[e.to].y - nodes[e.from].y > 0.25 then v = v + 1 end
     end
     dir = (v > h) and "vertical" or "horizontal"
+  end
+
+  if o.tiles then
+    o.sizes = {}
+    for i, t in pairs(o.tiles) do
+      o.sizes[i] = (dir == "horizontal") and { r = t.w, s = t.h } or { r = t.h, s = t.w }
+    end
   end
 
   local out, info
@@ -1067,6 +1138,19 @@ local function isOwnRouter(t)
   return a.TOOLS_RegID == "PipeRouter" and (a.TOOLS_Name or ""):sub(1, #ROUTER_PREFIX) == ROUTER_PREFIX
 end
 
+-- A tile showing a picture is taller and grows downward from its position. This
+-- is the height the layout reserves, in tiles: measured 1.94 flow units in
+-- Fusion Studio 21, and it keeps clear of a plain tile at spacing 0.75.
+local PICTURE_EXTENT = 2.7
+
+local function showsPicture(comp, t, forceAll)
+  if forceAll then return true end
+  local st = comp:CopySettings(t)
+  local tool = st and st.Tools and st.Tools[t.Name]
+  local flags = tool and tool.ViewInfo and tool.ViewInfo.Flags
+  return flags ~= nil and flags.ShowPic == true
+end
+
 -- Follows an output back through own routers to the output that feeds them.
 -- via lists the names of the routers passed.
 local function realOutput(out)
@@ -1098,15 +1182,42 @@ local function getFlow(comp)
   return nil
 end
 
-local function topLevel(t)
+local function parentOf(t)
+  local ok, parent = pcall(function() return t.ParentTool end)
+  return ok and parent or nil
+end
+
+-- t, or its ancestor directly inside group (nil is the comp's top level).
+-- Returns nil when t is outside group.
+local function atLevel(t, group)
   local seen = {}
   while t and not seen[t] do
     seen[t] = true
-    local ok, parent = pcall(function() return t.ParentTool end)
-    if not ok or not parent then return t end
+    local parent = parentOf(t)
+    if parent == group then return t end
     t = parent
   end
-  return t
+  return nil
+end
+
+-- The deepest Group that contains all of tools, nil if there is none.
+local function commonGroup(tools)
+  local common
+  for i, t in ipairs(tools) do
+    local chain, parent = {}, parentOf(t)
+    while parent do
+      table.insert(chain, 1, parent)
+      parent = parentOf(parent)
+    end
+    if i == 1 then
+      common = chain
+    else
+      local n = 0
+      while common[n + 1] and common[n + 1] == chain[n + 1] do n = n + 1 end
+      for k = #common, n + 1, -1 do common[k] = nil end
+    end
+  end
+  return common and common[#common] or nil
 end
 
 local function isMask(id, dt)
@@ -1114,7 +1225,7 @@ local function isMask(id, dt)
 end
 
 -- Connected inputs of `tool` whose source is in `index`, with slot numbers.
-local function toolEdges(tool, index)
+local function toolEdges(tool, index, group)
   local list = {}
   local inputs = tool:GetInputList() or {}
   local keys = {}
@@ -1126,7 +1237,7 @@ local function toolEdges(tool, index)
     local via
     if ok and out then out, via = realOutput(out) end
     if ok and out then
-      local src = topLevel(out:GetTool())
+      local src = atLevel(out:GetTool(), group)
       if src and index[src] and src ~= tool then
         local a = inp:GetAttrs() or {}
         list[#list + 1] = { src = index[src], id = a.INPS_ID or "", dt = a.INPS_DataType or "",
@@ -1207,12 +1318,12 @@ local function framePad(rect, members, posOf)
          { left = x0, right = x1, top = y0, bottom = y1 }
 end
 
--- opts: direction = "auto"|"horizontal"|"vertical"; selected = false to ignore
--- the selection; apply = false computes the layout without moving anything;
--- routers = true routes long links through PipeRouters.
--- 2+ selected tools: only those are arranged. Otherwise the whole comp is.
--- A tool selected inside a Group counts as the Group; a selected Underlay
--- selects the tools inside it.
+-- opts: direction = "auto"|"right"|"left"|"down"|"up"; spacing multiplies the
+-- gaps; selected = false to ignore the selection; apply = false computes the
+-- layout without moving anything; routers = true routes long links through PipeRouters.
+-- The level arranged is the deepest Group holding every selected tool, else the
+-- comp's top level. 2+ selected tools at that level: only those are arranged.
+-- Otherwise the whole level is. A selected Underlay selects the tools inside it.
 -- The anchor (a single selected tool, else the active tool) keeps its position.
 function M.run(comp, opts)
   opts = opts or {}
@@ -1222,11 +1333,19 @@ function M.run(comp, opts)
   local flow = getFlow(comp)
   if not flow then print("[NodeArrange] no FlowView, open the Fusion page") return end
 
-  -- top-level tiles, and the Notes and Underlays that are not arranged as tiles
-  local all, extras, routers, seen = {}, {}, {}, {}
+  local rawSelected = {}
+  for _, t in pairs((opts.selected ~= false) and comp:GetToolList(true) or {}) do
+    rawSelected[#rawSelected + 1] = t
+  end
+  local group = commonGroup(rawSelected)
+  -- AddTool and Paste always create at the top level, so inside a Group nothing
+  -- can be added and an Underlay cannot be resized.
+  local canCreate = group == nil
+
+  -- tiles at this level, and the Notes and Underlays that are not arranged as tiles
+  local all, extras, routers = {}, {}, {}
   for _, t in pairs(comp:GetToolList(false) or {}) do
-    if topLevel(t) == t and not seen[t] and flow:GetPos(t) then
-      seen[t] = true
+    if parentOf(t) == group and flow:GetPos(t) then
       local id = (t:GetAttrs() or {}).TOOLS_RegID or ""
       if isOwnRouter(t) then routers[#routers + 1] = t
       elseif SKIP_TYPES[id] then extras[#extras + 1] = t
@@ -1259,10 +1378,9 @@ function M.run(comp, opts)
     if inner and inner ~= outer then table.insert(inner.inner, t) end
   end
 
-  local picked, raw = {}, 0
-  for _, t in pairs((opts.selected ~= false) and comp:GetToolList(true) or {}) do
-    raw = raw + 1
-    local top = topLevel(t)
+  local picked = {}
+  for _, t in ipairs(rawSelected) do
+    local top = atLevel(t, group)
     if frameOf[top] then
       for _, m in ipairs(frameOf[top].members) do picked[m] = true end
       for _, m in ipairs(frameOf[top].inner) do picked[m] = true end
@@ -1274,14 +1392,14 @@ function M.run(comp, opts)
   for _, t in ipairs(all) do if picked[t] then selected[#selected + 1] = t end end
   local tools, scope = selected, "selection"
   if #selected < 2 then
-    tools, scope = all, "comp"
-    if raw > 0 and #selected == 0 then
-      print("[NodeArrange] the selection has no tools to arrange; arranging the whole comp")
+    tools, scope = all, group and group.Name or "comp"
+    if #rawSelected > 0 and #selected == 0 then
+      print("[NodeArrange] the selection has no tools to arrange; arranging all of " .. scope)
     end
   end
   if #tools == 0 then print("[NodeArrange] nothing to arrange") return end
   local anchorTool = selected[1]
-  if #selected ~= 1 then anchorTool = topLevel(comp.ActiveTool) end
+  if #selected ~= 1 then anchorTool = atLevel(comp.ActiveTool, group) end
 
   local index, nodes, edges = {}, {}, {}
   for i, t in ipairs(tools) do
@@ -1296,7 +1414,7 @@ function M.run(comp, opts)
   for _, r in ipairs(routers) do
     local src = realOutput(r.Output)
     local cons = routerConsumers(r, {})
-    local ok = src ~= nil and index[topLevel(src:GetTool())] ~= nil
+    local ok = src ~= nil and index[atLevel(src:GetTool(), group)] ~= nil
     for _, inp in ipairs(cons) do ok = ok and index[inp:GetTool()] ~= nil end
     if ok then removed[r.Name] = { tool = r, src = src, cons = cons }
     else keptRouters[#keptRouters + 1] = r end
@@ -1304,7 +1422,7 @@ function M.run(comp, opts)
 
   local wires = {}
   for i, t in ipairs(tools) do
-    for _, l in ipairs(toolEdges(t, index)) do
+    for _, l in ipairs(toolEdges(t, index, group)) do
       edges[#edges + 1] = { from = l.src, to = i, slot = l.slot, main = l.main }
       local keep = false
       for _, name in ipairs(l.via) do keep = keep or not removed[name] end
@@ -1312,14 +1430,25 @@ function M.run(comp, opts)
     end
   end
 
+  local forceAll = (comp:GetPrefs("Comp.FlowView") or {}).ForceAll
   local layoutOpts = copyDefaults(opts)
   layoutOpts.anchor = anchorTool and index[anchorTool]
+  layoutOpts.tiles = {}
+  for i, t in ipairs(tools) do
+    if showsPicture(comp, t, forceAll) then layoutOpts.tiles[i] = { w = 1, h = PICTURE_EXTENT } end
+  end
+  if not canCreate and layoutOpts.routers then
+    layoutOpts.routers = false
+    print("[NodeArrange] routers cannot be added inside a Group; arranging without them")
+  end
   layoutOpts.obstacles, layoutOpts.clusters = {}, {}
   if scope == "selection" then
     for _, t in ipairs(all) do
       if not index[t] then
         local x, y = flow:GetPos(t)
-        table.insert(layoutOpts.obstacles, { x = x, y = y })
+        local pic = showsPicture(comp, t, forceAll)
+        table.insert(layoutOpts.obstacles, { x = x, y = pic and y + (PICTURE_EXTENT - 1) / 2 or y,
+          h = pic and PICTURE_EXTENT or 1 })
       end
     end
   end
@@ -1329,7 +1458,10 @@ function M.run(comp, opts)
   end
   local function oldPos(t) return flow:GetPos(t) end
   local clusterFrame = {}
-  for _, f in ipairs(frames) do
+  if not canCreate and #extras > 0 then
+    print("[NodeArrange] Underlays and Notes inside a Group stay where they are")
+  end
+  for _, f in ipairs(canCreate and frames or {}) do
     local arranged = 0
     for _, t in ipairs(f.members) do if index[t] then arranged = arranged + 1 end end
     if arranged > 0 and arranged == #f.members then
@@ -1348,7 +1480,7 @@ function M.run(comp, opts)
   -- Notes and Underlays without tools of their own ride along with the block
   -- they sit in; any other Underlay without arranged tools is an obstacle.
   local riders = {}
-  for _, t in ipairs(extras) do
+  for _, t in ipairs(canCreate and extras or {}) do
     local f = frameOf[t]
     if not (f and (f.cluster or f.innerPad)) then
       local x, y = flow:GetPos(t)
@@ -1463,6 +1595,103 @@ function M.run(comp, opts)
     print(string.format("[NodeArrange] %d tiles overlap unselected tools%s", info.overlaps,
       layoutOpts.anchor and ("; the anchor " .. anchorTool.Name .. " was kept in place") or ""))
   end
+end
+
+local DIRECTIONS = { "auto", "right", "left", "down", "up" }
+
+-- Asks for the direction, spacing and routers, then arranges. Remembers the choice.
+function M.dialog(comp)
+  local fu = fu or fusion or app
+  comp = comp or fu:GetCurrentComp()
+  if not comp then print("[NodeArrange] no comp") return end
+  local last = fu:GetData("NodeArrange.Dialog") or {}
+  local answer = comp:AskUser("Arrange Nodes", {
+    { "Direction", Name = "Direction", "Dropdown",
+      Options = { "Auto", "Right", "Left", "Down", "Up" }, Default = last.Direction or 0 },
+    { "Spacing", Name = "Spacing", "Slider", Min = 0.75, Max = 3, Default = last.Spacing or 1 },
+    { "Routers", Name = "Route long links through routers", "Checkbox", Default = last.Routers or 0 },
+  })
+  if not answer then return end
+  fu:SetData("NodeArrange.Dialog", { Direction = answer.Direction, Spacing = answer.Spacing, Routers = answer.Routers })
+  return M.run(comp, { direction = DIRECTIONS[answer.Direction + 1], spacing = answer.Spacing,
+                       routers = answer.Routers == 1 })
+end
+
+-- opts: axis = "row"|"column"; gap = distance between tiles, default the layout's.
+-- Puts the selected tools in one line in their current order. The active tool
+-- keeps its position if selected, else the first in order does.
+function M.align(comp, opts)
+  opts = opts or {}
+  local fu = fu or fusion or app
+  comp = comp or fu:GetCurrentComp()
+  if not comp then print("[NodeArrange] no comp") return end
+  local flow = getFlow(comp)
+  if not flow then print("[NodeArrange] no FlowView, open the Fusion page") return end
+
+  local raw = {}
+  for _, t in pairs(comp:GetToolList(true) or {}) do raw[#raw + 1] = t end
+  local group = commonGroup(raw)
+  local tools, picked = {}, {}
+  for _, t in ipairs(raw) do
+    local top = atLevel(t, group)
+    if not picked[top] and not SKIP_TYPES[(top:GetAttrs() or {}).TOOLS_RegID or ""] then
+      picked[top] = true
+      local x, y = flow:GetPos(top)
+      tools[#tools + 1] = { tool = top, x = x, y = y }
+    end
+  end
+  if #tools < 2 then print("[NodeArrange] select 2 or more tools to align") return end
+
+  local row = opts.axis ~= "column"
+  table.sort(tools, function(a, b)
+    if row then
+      if a.x ~= b.x then return a.x < b.x end
+      return a.y < b.y
+    end
+    if a.y ~= b.y then return a.y < b.y end
+    return a.x < b.x
+  end)
+  local pin = 1
+  local active = atLevel(comp.ActiveTool, group)
+  for i, it in ipairs(tools) do if it.tool == active then pin = i end end
+
+  local gap = opts.gap or (row and M.defaults.horizontal.layer or M.defaults.horizontal.node)
+  local forceAll = (comp:GetPrefs("Comp.FlowView") or {}).ForceAll
+  local extra = {}
+  for i, it in ipairs(tools) do
+    extra[i] = (not row and showsPicture(comp, it.tool, forceAll)) and (PICTURE_EXTENT - 1) / 2 or 0
+  end
+  local at = tools[pin]
+  at.nx, at.ny = at.x, at.y
+  local function place(i, step)
+    local prev = tools[i - step]
+    local d = (gap + extra[i] + extra[i - step]) * step
+    tools[i].nx = row and prev.nx + d or at.x
+    tools[i].ny = row and at.y or prev.ny + d
+  end
+  for i = pin + 1, #tools do place(i, 1) end
+  for i = pin - 1, 1, -1 do place(i, -1) end
+
+  comp:StartUndo("Align Selection")
+  local ok, err = pcall(function()
+    for _, it in ipairs(tools) do flow:QueueSetPos(it.tool, it.nx, it.ny) end
+    flow:FlushSetPosQueue()
+  end)
+  comp:EndUndo(true)
+  if not ok then print("[NodeArrange] stopped part way, use Undo to go back: " .. tostring(err)) return end
+
+  local covered = 0
+  for _, t in pairs(comp:GetToolList(false) or {}) do
+    if parentOf(t) == group and not picked[t] and not SKIP_TYPES[(t:GetAttrs() or {}).TOOLS_RegID or ""] then
+      local x, y = flow:GetPos(t)
+      for _, it in ipairs(tools) do
+        if x and math.abs(x - it.nx) < 1 and math.abs(y - it.ny) < 1 then covered = covered + 1 break end
+      end
+    end
+  end
+  print(string.format("[NodeArrange] aligned %d tools in a %s, %s kept in place", #tools,
+    row and "row" or "column", at.tool.Name))
+  if covered > 0 then print(string.format("[NodeArrange] %d tiles overlap unselected tools", covered)) end
 end
 
 return M
