@@ -10,7 +10,7 @@ M.run(comp, opts) is the Fusion glue.
 ]]
 
 local M = {}
-M.VERSION = "1.5"
+M.VERSION = "1.6"
 
 M.defaults = {
   -- "auto" picks horizontal or vertical from the comp's current links.
@@ -401,13 +401,24 @@ local function layoutComponent(nodes, edges, compNodes, compEdges, sp, o, origS)
     return g + (extent(p, "s") - 1) / 2 + (extent(q, "s") - 1) / 2
   end
 
-  -- column positions; a wide block pushes its neighbouring columns apart
-  local wide, R = {}, { [0] = 0 }
-  for r = 0, nLayers - 1 do wide[r] = 1 end
-  for _, it in ipairs(items) do wide[it.rank] = math.max(wide[it.rank], extent(it, "r")) end
-  for r = 1, nLayers - 1 do
-    R[r] = R[r - 1] + sp.layer + (wide[r - 1] - 1) / 2 + (wide[r] - 1) / 2
+  -- column positions; a wide block pushes its neighbouring columns apart,
+  -- an emptied column takes no room
+  local R
+  local function columns()
+    local wide, last = {}, nil
+    R = { [0] = 0 }
+    for r = 0, nLayers - 1 do wide[r] = 1 end
+    for _, it in ipairs(items) do wide[it.rank] = math.max(wide[it.rank], extent(it, "r")) end
+    for r = 0, nLayers - 1 do
+      if #layers[r] == 0 then
+        R[r] = last and R[last] or 0
+      else
+        R[r] = last and R[last] + sp.layer + (wide[last] - 1) / 2 + (wide[r] - 1) / 2 or 0
+        last = r
+      end
+    end
   end
+  columns()
 
 
   local function assign()
@@ -613,6 +624,42 @@ local function layoutComponent(nodes, edges, compNodes, compEdges, sp, o, origS)
     end
     if not accepted then break end
   end
+
+  -- A source feeding only a side input of the next column moves into that
+  -- column beside its consumer, so the link is drawn straight across the flow
+  -- instead of at an angle. It stays put when the spot or the way is taken.
+  local moved, again = false, true
+  while again do
+  again = false
+  for _, it in ipairs(items) do
+    local out = outSeg[it]
+    local b = out[1] and out[1].b
+    if it.node and #inSeg[it] == 0 and #out == 1 and not out[1].main and b.node then
+      local L = layers[b.rank]
+      local side = (s[it] > s[b] + EPS and 1) or (s[it] < s[b] - EPS and -1)
+        or (out[1].slot > 0 and 1 or -1)
+      for _, want in ipairs({ s[b] + side * gapBetween(it, b), s[it] }) do
+        local ok = (want - s[b]) * side > 0
+        for _, q in ipairs(L) do
+          if q ~= b and (math.abs(want - s[q]) < gapBetween(it, q) - EPS
+              or (s[q] - want) * (s[q] - s[b]) < 0) then
+            ok = false
+          end
+        end
+        if ok then
+          local old = layers[it.rank]
+          for i, q in ipairs(old) do if q == it then table.remove(old, i) break end end
+          local at = #L + 1
+          for i, q in ipairs(L) do if s[q] > want then at = i break end end
+          table.insert(L, at, it)
+          it.rank, s[it], moved, again = b.rank, want, true, true
+          break
+        end
+      end
+    end
+  end
+  end
+  if moved then columns() end
 
   local pos = {}
   for _, it in ipairs(items) do
@@ -989,14 +1036,24 @@ function M.layout(nodes, edges, opts)
   local broken
   edges, broken = dropBackEdges(nodes, mergeEdges(nodes, edges))
 
-  -- auto: the axis along which more links point forward
+  -- auto: the axis along which more links point forward. A source's side
+  -- input may be laid across the flow, so it votes only if nothing else does.
   local dir = o.direction
   if dir ~= "horizontal" and dir ~= "vertical" then
-    local h, v = 0, 0
-    for _, e in ipairs(edges) do
-      if nodes[e.to].x - nodes[e.from].x > 0.25 then h = h + 1 end
-      if nodes[e.to].y - nodes[e.from].y > 0.25 then v = v + 1 end
+    local fed = {}
+    for _, e in ipairs(edges) do fed[e.to] = true end
+    local function count(all)
+      local h, v = 0, 0
+      for _, e in ipairs(edges) do
+        if all or e.main or fed[e.from] then
+          if nodes[e.to].x - nodes[e.from].x > 0.25 then h = h + 1 end
+          if nodes[e.to].y - nodes[e.from].y > 0.25 then v = v + 1 end
+        end
+      end
+      return h, v
     end
+    local h, v = count(false)
+    if h + v == 0 then h, v = count(true) end
     dir = (v > h) and "vertical" or "horizontal"
   end
 

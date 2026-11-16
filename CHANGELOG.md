@@ -3,6 +3,15 @@
 All notable changes to Node Arrange. Versions match `Version` in
 `net.ra100.NodeArrange.atom` and the git tags.
 
+## [1.6] - 2026-11-16
+
+### Changed
+
+- A source tool on a side input (a Text into a Merge foreground, a mask)
+  goes beside its consumer, level with it, so the link is straight instead
+  of slanting in from the previous column or row. It stays put when another
+  tile or link is in the way. Such links no longer sway the auto direction.
+
 ## [1.5] - 2026-11-04
 
 ### Added
@@ -125,6 +134,7 @@ All notable changes to Node Arrange. Versions match `Version` in
 - Menu entries in Resolve (Workspace > Scripts > Comp > Node Arrange) and in
   the Fusion Studio menu bar.
 
+[1.6]: https://github.com/ra100/fusion-node-arrange/compare/v1.5...v1.6
 [1.5]: https://github.com/ra100/fusion-node-arrange/compare/v1.4...v1.5
 [1.4]: https://github.com/ra100/fusion-node-arrange/compare/v1.3...v1.4
 [1.3]: https://github.com/ra100/fusion-node-arrange/compare/v1.2...v1.3

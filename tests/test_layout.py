@@ -68,8 +68,12 @@ def run_layout(lua, M, names, links, positions, opts=None):
 def check(names, links, pos, direction):
     errors = []
     axis = 0 if direction == "horizontal" else 1
-    for a, b, _, _ in links:
-        if pos[b][axis] <= pos[a][axis]:
+    sources = {a for a, _, _, _ in links} - {b for _, b, _, _ in links}
+    for a, b, _, main in links:
+        # a source on a side input may sit level beside its consumer
+        across = (a in sources and not main and abs(pos[b][axis] - pos[a][axis]) < 1e-6
+                  and abs(pos[b][1 - axis] - pos[a][1 - axis]) >= 1 - 1e-6)
+        if pos[b][axis] <= pos[a][axis] and not across:
             errors.append(f"link {a}->{b} not downstream")
     for i, a in enumerate(names):
         for b in names[i + 1:]:
@@ -286,6 +290,18 @@ def edge_cases(lua, M):
         return None if again["direction"] == "vertical" else "auto flipped to horizontal"
     case("fan-in stays vertical in auto", fan, fan_links, fan_pos, {"direction": "vertical"}, keeps_vertical)
 
+    # Text1 over a Merge stack, Text2..Text8 on the foreground inputs
+    stack = [f"Text{k}" for k in range(1, 9)] + [f"Merge{k}" for k in range(1, 8)]
+    stack_links = [("Text1", "Merge1", 0, True)] + [(f"Text{k + 1}", f"Merge{k}", -1, False) for k in range(1, 8)] \
+        + [(f"Merge{k - 1}", f"Merge{k}", 0, True) for k in range(2, 8)]
+    stack_pos = {n: (k * 0.1, k * 0.1) for k, n in enumerate(stack)}
+    for d, axis in (("vertical", 1), ("horizontal", 0), ("up", 1)):
+        def level(p, i, axis=axis):
+            off = [k for k in range(1, 8) if abs(p[f"Text{k + 1}"][axis] - p[f"Merge{k}"][axis]) > 1e-6]
+            return None if not off else f"Text not level with Merge {off}"
+        case(f"side inputs sit beside their Merge, {d}", stack, stack_links, stack_pos,
+             {"direction": d, "tiles": {f"Text{k}": (1, 2.7) for k in range(1, 9)}}, level)
+
     chain = ["A", "B", "C", "D", "E"]
     chain_links = [("A", "D", -1, False), ("B", "D", 0, True), ("C", "D", 1, False), ("D", "E", 0, True)]
     chain_pos = {"A": (0, 0), "B": (0, 2), "C": (0, 4), "D": (3, 2), "E": (6, 2)}
@@ -329,7 +345,9 @@ def option_cases(lua, M):
         mirrored_in = {n: ((-x, y) if axis == 0 else (x, -y)) for n, (x, y) in positions.items()}
         fwd, _ = run_layout(lua, M, names, links, mirrored_in, {"direction": base})
         pos, info = run_layout(lua, M, names, links, positions, {"direction": sense})
-        verify(f"{sense}: links run the other way", all(pos[b][axis] < pos[a][axis] for a, b, _, _ in links))
+        verify(f"{sense}: links run the other way",
+               not [e for e in check(names, links, {n: (-x, y) if axis == 0 else (x, -y) for n, (x, y) in pos.items()},
+                                     base) if "downstream" in e])
         verify(f"{sense}: mirrors {base}",
                all(abs(pos[n][axis] + fwd[n][axis]) < 1e-6 and abs(pos[n][1 - axis] - fwd[n][1 - axis]) < 1e-6
                    for n in names))

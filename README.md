@@ -35,6 +35,8 @@ Node Arrange:
 4. **Placement.** For each column, a weighted least-squares fit with minimum
    spacing. Main inputs weigh most, so the main image path is a straight line.
    Foreground sources go one row above the node they feed, masks one row below.
+   A source tool that feeds only a side input of the next column then moves
+   into that column beside its consumer, so the link is straight, not slanted.
    A long link's placeholders are held on the straight line Fusion draws.
    With routers on, they are held level with each other instead, and a
    PipeRouter goes where the link bends (see below).

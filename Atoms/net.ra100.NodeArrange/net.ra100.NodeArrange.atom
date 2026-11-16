@@ -2,15 +2,15 @@ Atom {
 	Name = "Node Arrange",
 	Category = "Scripts/Flow",
 	Author = "ra100",
-	Version = 1.5,
-	Date = {2026, 11, 4},
+	Version = 1.6,
+	Date = {2026, 11, 16},
 	Description = [[<p>Blender-style "Arrange Nodes" for the Fusion node view. One click lays out the selected tools (or the whole comp) as a clean left-to-right or top-to-bottom flow.</p>
 
 <p>Layered (Sugiyama) layout, the same family of algorithm Blender's Node Arrange uses:</p>
 <ul>
 	<li>Each tool gets a column; tools sit right before their nearest consumer.</li>
 	<li>Crossing reduction (barycenter sweeps plus adjacent swaps).</li>
-	<li>Tools sit level with their main input where there is room, so the main image path is straight; Foreground inputs go one row above, masks one row below.</li>
+	<li>Tools sit level with their main input where there is room, so the main image path is straight; Foreground inputs go one row above, masks one row below; a source tool on a side input sits level beside its consumer, so that link is straight too.</li>
 	<li>Independent node trees are stacked and right-aligned on their outputs.</li>
 	<li>Links that would pass behind a tile are moved off it where a swap allows.</li>
 	<li>Underlays and the tools inside them are arranged as one block, and the Underlay is resized to fit.</li>
@@ -34,6 +34,7 @@ Atom {
 
 <p>Changes:</p>
 <ul>
+	<li>1.6: a source on a side input (Text into a Merge foreground, a mask) sits level beside its consumer, so the link is straight.</li>
 	<li>1.5: arrange inside a Group, flow direction and spacing dialog, room for picture tiles, Align Selection.</li>
 	<li>1.4: Arrange Nodes with Routers.</li>
 	<li>1.3: straighter main path, stable re-runs with Underlays, loops through Groups no longer stop the run, selection inside Groups and by Underlay, undo-safe on errors.</li>
